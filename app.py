@@ -5,6 +5,7 @@ import plotly.express as px
 import plotly.graph_objects as go
 import os
 import pickle
+from datetime import datetime
 
 # ═══════════════════════════════════════════════════════════════════════════════
 #  CONFIG
@@ -117,10 +118,14 @@ st.markdown(f"""
         border: 1px solid #e0e4e8;
     }}
     .db-box h5 {{ margin: 0 0 8px; color: {NAVY}; font-size: 13px; }}
-    .db-box .field {{ font-size: 12px; margin: 4px 0; }}
-    .db-box .field-label {{ color: #888; font-size: 11px; }}
+    .db-field {{ font-size: 12px; margin: 4px 0; }}
+    .db-label {{ color: #888; font-size: 11px; }}
     .match {{ color: {CYAN}; }}
     .mismatch {{ color: {RED}; font-weight: 600; }}
+    .move-warn {{
+        background:#fff3cd; border-radius:6px; padding:8px 12px;
+        margin-top:8px; font-size:12px; border:1px solid #ffc107;
+    }}
 </style>
 """, unsafe_allow_html=True)
 
@@ -129,8 +134,8 @@ st.markdown(f"""
 #  AUTH
 # ═══════════════════════════════════════════════════════════════════════════════
 SCOPES = [
-    'https://www.googleapis.com/auth/spreadsheets.readonly',
-    'https://www.googleapis.com/auth/drive.readonly',
+    'https://www.googleapis.com/auth/spreadsheets',
+    'https://www.googleapis.com/auth/drive',
 ]
 CREDENTIALS_FILE = r"c:\Users\SPXBR26731\OneDrive - Seagroup\Área de Trabalho\codes\credentials.json"
 TOKEN_FILE = r"c:\Users\SPXBR26731\OneDrive - Seagroup\Área de Trabalho\codes\token_write.pickle"
@@ -280,111 +285,154 @@ def indent_level(s):
     return 7
 
 
-def eq_cls(person, field):
-    return "match" if person.get(field, False) else "mismatch"
-
-
 def render_employee_card(person):
+    """Build employee card HTML as a compact string (no blank lines)."""
+    g = lambda f, d='-': person.get(f, d) if person.get(f, d) else d
     tipo = "FTE" if person.get('spx', False) else "BPO"
     tipo_bg = BLUE if tipo == "FTE" else ORANGE
-    active = "Ativo" if person.get('active', False) else "Inativo"
-    active_bg = CYAN if active == "Ativo" else RED
+    active_str = "Ativo" if person.get('active', False) else "Inativo"
+    active_bg = CYAN if active_str == "Ativo" else RED
     in_hr = person.get('in_hr', False)
     in_att = person.get('in_att', False)
     in_perf = person.get('in_perf', False)
+    eq = lambda f: "match" if person.get(f, False) else "mismatch"
+    ok = lambda v: "✅" if v else "❌"
 
-    html = f'''
-    <div class="emp-card">
-        <h3>{person.get('sot_name', 'N/A')}</h3>
-        <div style="margin-bottom:10px;">
-            <span class="emp-badge" style="background:{tipo_bg}">{tipo}</span>
-            <span class="emp-badge" style="background:{active_bg}">{active}</span>
-            <span style="font-size:13px;color:#666;margin-left:10px;">
-                Staff ID: <b>{person.get('staff_id', 'N/A')}</b>
-            </span>
-        </div>
-        <div style="font-size:13px;margin-bottom:8px;">
-            {"✅" if in_hr else "❌"} HR &nbsp;&nbsp;
-            {"✅" if in_att else "❌"} Attendance &nbsp;&nbsp;
-            {"✅" if in_perf else "❌"} Performance
-        </div>
-        <div style="font-size:12px;color:#888;margin-bottom:6px;">
-            Location SoT: <b>{person.get('loc_sot', '-')}</b> ·
-            Site Type: <b>{person.get('loc_type', '-')}</b> ·
-            Cargo SoT: <b>{person.get('sot_func', '-')}</b>
-        </div>
-    '''
-    bpo_name = person.get('bpo_name', 'N/A')
-    cat = person.get('categoria', 'N/A')
-    contrato = person.get('tipo_contrato', 'N/A')
-    status = person.get('status_hr', 'N/A')
-    if any(v not in ('N/A', '', '-') for v in [bpo_name, cat, contrato, status]):
-        html += f'''
-        <div style="font-size:12px;color:#888;margin-bottom:12px;">
-            BPO: <b>{bpo_name}</b> ·
-            Categoria: <b>{cat}</b> ·
-            Contrato: <b>{contrato}</b> ·
-            Status HR: <b>{status}</b>
-        </div>
-        '''
+    p = []
+    p.append(f'<div class="emp-card">')
+    p.append(f'<h3>{g("sot_name","N/A")}</h3>')
+    p.append(f'<div style="margin-bottom:10px;">'
+             f'<span class="emp-badge" style="background:{tipo_bg}">{tipo}</span>'
+             f'<span class="emp-badge" style="background:{active_bg}">{active_str}</span>'
+             f'<span style="font-size:13px;color:#666;margin-left:10px;">'
+             f'Staff ID: <b>{g("staff_id","N/A")}</b></span></div>')
+    p.append(f'<div style="font-size:13px;margin-bottom:8px;">'
+             f'{ok(in_hr)} HR &nbsp;&nbsp;{ok(in_att)} Attendance &nbsp;&nbsp;'
+             f'{ok(in_perf)} Performance</div>')
+    p.append(f'<div style="font-size:12px;color:#888;margin-bottom:6px;">'
+             f'Location SoT: <b>{g("loc_sot")}</b> · '
+             f'Site Type: <b>{g("loc_type")}</b> · '
+             f'Cargo SoT: <b>{g("sot_func")}</b></div>')
 
-    html += '<div class="db-grid">'
-    # HR box
-    html += f'''
-    <div class="db-box">
-        <h5>{"✅" if in_hr else "❌"} HR</h5>
-        <div class="field"><span class="field-label">Nome:</span>
-            <span class="{eq_cls(person, 'name_eq_hr')}">{person.get('name_hr', '-')}</span></div>
-        <div class="field"><span class="field-label">Cargo:</span>
-            <span class="{eq_cls(person, 'func_eq_hr')}">{person.get('func_hr', '-')}</span></div>
-        <div class="field"><span class="field-label">Sort Code:</span>
-            <span class="{eq_cls(person, 'loc_eq_hr')}">{person.get('sc_hr', '-')}</span></div>
-        <div class="field"><span class="field-label">CNPJ:</span> {person.get('cnpj_hr', '-')}</div>
-        <div class="field"><span class="field-label">Subteam:</span> {person.get('subteam_hr', '-')}</div>
-    </div>
-    '''
-    # Attendance box
-    html += f'''
-    <div class="db-box">
-        <h5>{"✅" if in_att else "❌"} Attendance</h5>
-        <div class="field"><span class="field-label">Nome:</span>
-            <span class="{eq_cls(person, 'name_eq_att')}">{person.get('name_att', '-')}</span></div>
-        <div class="field"><span class="field-label">Cargo:</span>
-            <span class="{eq_cls(person, 'func_eq_att')}">{person.get('func_att', '-')}</span></div>
-        <div class="field"><span class="field-label">Sort Code:</span>
-            <span class="{eq_cls(person, 'loc_eq_att')}">{person.get('sc_att', '-')}</span></div>
-        <div class="field"><span class="field-label">CNPJ:</span> {person.get('cnpj_att', '-')}</div>
-        <div class="field"><span class="field-label">Subteam:</span> {person.get('subteam_att', '-')}</div>
-    </div>
-    '''
-    # Performance box
-    html += f'''
-    <div class="db-box">
-        <h5>{"✅" if in_perf else "❌"} Performance</h5>
-        <div class="field"><span class="field-label">Nome:</span>
-            <span class="{eq_cls(person, 'name_eq_perf')}">{person.get('name_perf', '-')}</span></div>
-        <div class="field"><span class="field-label">Cargo:</span>
-            <span class="{eq_cls(person, 'func_eq_perf')}">{person.get('func_perf', '-')}</span></div>
-        <div class="field"><span class="field-label">Sort Code:</span>
-            <span class="{eq_cls(person, 'loc_eq_perf')}">{person.get('sc_perf', '-')}</span></div>
-        <div class="field"><span class="field-label">CNPJ:</span> {person.get('cnpj_perf', '-')}</div>
-    </div>
-    '''
-    html += '</div>'
+    bpo_n = g('bpo_name', 'N/A')
+    cat = g('categoria', 'N/A')
+    ctr = g('tipo_contrato', 'N/A')
+    sts = g('status_hr', 'N/A')
+    if any(v not in ('N/A', '', '-') for v in [bpo_n, cat, ctr, sts]):
+        p.append(f'<div style="font-size:12px;color:#888;margin-bottom:12px;">'
+                 f'BPO: <b>{bpo_n}</b> · Categoria: <b>{cat}</b> · '
+                 f'Contrato: <b>{ctr}</b> · Status HR: <b>{sts}</b></div>')
+
+    p.append('<div class="db-grid">')
+    # HR
+    p.append(f'<div class="db-box"><h5>{ok(in_hr)} HR</h5>'
+             f'<div class="db-field"><span class="db-label">Nome:</span> '
+             f'<span class="{eq("name_eq_hr")}">{g("name_hr")}</span></div>'
+             f'<div class="db-field"><span class="db-label">Cargo:</span> '
+             f'<span class="{eq("func_eq_hr")}">{g("func_hr")}</span></div>'
+             f'<div class="db-field"><span class="db-label">Sort Code:</span> '
+             f'<span class="{eq("loc_eq_hr")}">{g("sc_hr")}</span></div>'
+             f'<div class="db-field"><span class="db-label">CNPJ:</span> {g("cnpj_hr")}</div>'
+             f'<div class="db-field"><span class="db-label">Subteam:</span> {g("subteam_hr")}</div>'
+             f'</div>')
+    # Attendance
+    p.append(f'<div class="db-box"><h5>{ok(in_att)} Attendance</h5>'
+             f'<div class="db-field"><span class="db-label">Nome:</span> '
+             f'<span class="{eq("name_eq_att")}">{g("name_att")}</span></div>'
+             f'<div class="db-field"><span class="db-label">Cargo:</span> '
+             f'<span class="{eq("func_eq_att")}">{g("func_att")}</span></div>'
+             f'<div class="db-field"><span class="db-label">Sort Code:</span> '
+             f'<span class="{eq("loc_eq_att")}">{g("sc_att")}</span></div>'
+             f'<div class="db-field"><span class="db-label">CNPJ:</span> {g("cnpj_att")}</div>'
+             f'<div class="db-field"><span class="db-label">Subteam:</span> {g("subteam_att")}</div>'
+             f'</div>')
+    # Performance
+    p.append(f'<div class="db-box"><h5>{ok(in_perf)} Performance</h5>'
+             f'<div class="db-field"><span class="db-label">Nome:</span> '
+             f'<span class="{eq("name_eq_perf")}">{g("name_perf")}</span></div>'
+             f'<div class="db-field"><span class="db-label">Cargo:</span> '
+             f'<span class="{eq("func_eq_perf")}">{g("func_perf")}</span></div>'
+             f'<div class="db-field"><span class="db-label">Sort Code:</span> '
+             f'<span class="{eq("loc_eq_perf")}">{g("sc_perf")}</span></div>'
+             f'<div class="db-field"><span class="db-label">CNPJ:</span> {g("cnpj_perf")}</div>'
+             f'</div>')
+    p.append('</div>')
 
     if person.get('moving', False) or person.get('new_hub', False):
-        html += f'''
-        <div style="background:#fff3cd;border-radius:6px;padding:8px 12px;margin-top:8px;
-                     font-size:12px;border:1px solid #ffc107;">
-            ⚠️ <b>Movimentação:</b>
-            Same Hub: {"Sim" if person.get('same_hub', False) else "Não"} ·
-            Moving: {"Sim" if person.get('moving', False) else "Não"} ·
-            New Hub: {"Sim" if person.get('new_hub', False) else "Não"}
-        </div>
-        '''
+        sh = "Sim" if person.get('same_hub', False) else "Não"
+        mv = "Sim" if person.get('moving', False) else "Não"
+        nh = "Sim" if person.get('new_hub', False) else "Não"
+        p.append(f'<div class="move-warn">⚠️ <b>Movimentação:</b> '
+                 f'Same Hub: {sh} · Moving: {mv} · New Hub: {nh}</div>')
 
-    html += '</div>'
-    return html
+    p.append('</div>')
+    return ''.join(p)
+
+
+def export_to_gsheets(df, title):
+    """Create a new Google Sheet with the DataFrame data."""
+    gc = get_gc()
+    sh = gc.create(title)
+    ws = sh.get_worksheet(0)
+    ws.update_title("Dados")
+    export_df = df.copy()
+    for c in export_df.select_dtypes(include=[bool]).columns:
+        export_df[c] = export_df[c].map({True: 'TRUE', False: 'FALSE'})
+    export_df = export_df.fillna('')
+    rows = [export_df.columns.tolist()] + export_df.astype(str).values.tolist()
+    ws.update(range_name='A1', values=rows)
+    sh.share('', perm_type='anyone', role='reader')
+    return sh.url
+
+
+DISPLAY_COLS = ['staff_id', 'sot_name', 'spx', 'bpo', 'active',
+                'in_hr', 'in_att', 'in_perf', 'all_dbs',
+                'loc_sot', 'loc_type', 'loc_eq_total',
+                'sot_func', 'func_eq_total',
+                'same_hub', 'moving', 'new_hub']
+HR_COLS = ['bpo_name', 'categoria', 'tipo_contrato', 'status_hr']
+COL_RENAME = {
+    'staff_id': 'Staff ID', 'sot_name': 'Nome (SoT)',
+    'spx': 'FTE', 'bpo': 'BPO', 'active': 'Active',
+    'in_hr': 'In HR', 'in_att': 'In Att', 'in_perf': 'In Perf',
+    'all_dbs': 'All DBs', 'loc_sot': 'Location SoT',
+    'loc_type': 'Site Type', 'loc_eq_total': 'Sort Code OK',
+    'sot_func': 'Cargo (SoT)', 'func_eq_total': 'Cargo OK',
+    'same_hub': 'Same Hub', 'moving': 'Moving', 'new_hub': 'New Hub',
+    'bpo_name': 'BPO Name', 'categoria': 'Categoria',
+    'tipo_contrato': 'Tipo Contrato', 'status_hr': 'Status HR',
+}
+
+
+def build_display_df(df):
+    """Build a display-ready DataFrame with renamed columns."""
+    cols = DISPLAY_COLS[:]
+    if 'bpo_name' in df.columns:
+        cols += HR_COLS
+    out = df[[c for c in cols if c in df.columns]].copy()
+    return out.rename(columns=COL_RENAME)
+
+
+def render_export_buttons(display_df, key_prefix):
+    """Render CSV + Google Sheets export buttons."""
+    c1, c2 = st.columns(2)
+    with c1:
+        csv = display_df.to_csv(index=False).encode('utf-8')
+        st.download_button(
+            f"📥 CSV ({len(display_df):,} linhas)",
+            csv, f"{key_prefix}.csv", "text/csv",
+            use_container_width=True, key=f"csv_{key_prefix}")
+    with c2:
+        if st.button(f"📊 Google Sheets ({len(display_df):,} linhas)",
+                     use_container_width=True, key=f"gs_{key_prefix}"):
+            with st.spinner("Exportando para Google Sheets..."):
+                try:
+                    ts = datetime.now().strftime("%Y%m%d_%H%M")
+                    url = export_to_gsheets(
+                        display_df, f"HC_Recon_Export_{key_prefix}_{ts}")
+                    st.success(f"Exportado! [Abrir planilha]({url})")
+                except Exception as e:
+                    st.error(f"Erro ao exportar: {e}")
 
 
 # ═══════════════════════════════════════════════════════════════════════════════
@@ -401,7 +449,6 @@ def page_graficos(fdf):
     n_in_perf = int(fdf['in_perf'].sum())
     n_all_dbs = int(fdf['all_dbs'].sum())
 
-    # KPI row 1
     r1 = st.columns(6)
     for col, (title, val, color) in zip(r1, [
         ("Total HCs", n_total, NAVY), ("Active", n_active, CYAN),
@@ -413,7 +460,6 @@ def page_graficos(fdf):
             f'<h4>{title}</h4><h2>{fmt(val)}</h2></div>',
             unsafe_allow_html=True)
 
-    # KPI row 2
     r2 = st.columns(6)
     for col, (title, val, color) in zip(r2, [
         ("In HR", n_in_hr, NAVY), ("In Attendance", n_in_att, NAVY),
@@ -428,9 +474,8 @@ def page_graficos(fdf):
             unsafe_allow_html=True)
 
     st.markdown("")
-
-    # Charts row 1
     c1, c2, c3 = st.columns(3)
+
     with c1:
         st.markdown("##### HC por Database")
         fig = go.Figure(go.Bar(
@@ -439,7 +484,7 @@ def page_graficos(fdf):
             marker_color=[NAVY, CYAN, ORANGE],
             text=[fmt(n_in_hr), fmt(n_in_att), fmt(n_in_perf)],
             textposition='outside'))
-        fig.update_layout(height=250, margin=dict(l=10, r=10, t=10, b=30),
+        fig.update_layout(height=280, margin=dict(l=10, r=10, t=40, b=30),
                           yaxis_title="", xaxis_title="", font=dict(size=11))
         st.plotly_chart(fig, use_container_width=True)
 
@@ -447,11 +492,15 @@ def page_graficos(fdf):
         st.markdown("##### HC por Site Type")
         by_type = fdf['loc_type'].value_counts().reset_index()
         by_type.columns = ['Site Type', 'Count']
-        by_type = by_type[by_type['Site Type'].str.strip().ne('') & by_type['Site Type'].ne('-')]
+        by_type = by_type[
+            by_type['Site Type'].str.strip().ne('')
+            & by_type['Site Type'].ne('-')
+            & by_type['Site Type'].str.lower().ne('nan')
+        ]
         palette = [NAVY, BLUE, LBLUE, CYAN, ORANGE, RED, YELLOW, GOLD, GRAY]
         fig2 = px.bar(by_type, x='Site Type', y='Count', text_auto=True,
                       color='Site Type', color_discrete_sequence=palette)
-        fig2.update_layout(height=250, margin=dict(l=10, r=10, t=10, b=30),
+        fig2.update_layout(height=280, margin=dict(l=10, r=10, t=40, b=30),
                            showlegend=False, yaxis_title="", xaxis_title="",
                            font=dict(size=11))
         fig2.update_traces(texttemplate='%{y:,.0f}', textposition='outside')
@@ -467,7 +516,6 @@ def page_graficos(fdf):
                            showlegend=False, font=dict(size=11))
         st.plotly_chart(fig3, use_container_width=True)
 
-    # Charts row 2 - Divergences
     st.markdown("---")
     d1, d2 = st.columns(2)
     active_df = fdf[fdf['active']]
@@ -489,7 +537,7 @@ def page_graficos(fdf):
         fig_d = px.bar(div_data, x='Database', y='Count', color='Type',
                        barmode='group', text_auto=True,
                        color_discrete_map={'FTE': BLUE, 'BPO': ORANGE})
-        fig_d.update_layout(height=250, margin=dict(l=10, r=10, t=10, b=30),
+        fig_d.update_layout(height=280, margin=dict(l=10, r=10, t=40, b=30),
                             yaxis_title="", xaxis_title="", font=dict(size=11),
                             legend=dict(orientation="h", y=1.15, x=0.5, xanchor="center"))
         fig_d.update_traces(texttemplate='%{y:,.0f}', textposition='outside')
@@ -511,7 +559,6 @@ def page_graficos(fdf):
                              legend=dict(orientation="h", y=1.15, x=0.5, xanchor="center"))
         st.plotly_chart(fig_sc, use_container_width=True)
 
-    # SoT Rules
     st.markdown("---")
     with st.expander("📏 Source of Truth (SoT) Rules"):
         c_sc, c_jt = st.columns(2)
@@ -586,17 +633,15 @@ def page_recon(fdf, raw_summary):
 
     st.markdown("---")
 
-    # ── Sub-tabs: Todos | Desligamentos | Admissão | Mudanças ──
-    sub_todos, sub_deslig, sub_admis, sub_mud = st.tabs(
-        ["Todos", "Desligamentos", "Admissão", "Mudanças"])
+    # ── Sub-tabs: Todos | Actives | Inactives | Incorrect Sort Codes | Isn't in DB ──
+    sub_all, sub_active, sub_inactive, sub_sc, sub_nodb = st.tabs(
+        ["Todos", "Actives", "Inactives", "Incorrect Sort Codes", "Isn't in DB"])
 
     def render_recon_table(sub_df, key_suffix):
         st.caption(f"{len(sub_df):,} registros")
-
         qs1, qs2, qs3, qs4 = st.columns(4)
         with qs1:
-            n_not_all = int((~sub_df['all_dbs']).sum())
-            st.metric("Isn't in all DBs", fmt(n_not_all))
+            st.metric("Isn't in all DBs", fmt(int((~sub_df['all_dbs']).sum())))
         with qs2:
             adb = sub_df[sub_df['all_dbs']]
             st.metric("Sort Code Incorreto", fmt(int((~adb['loc_eq_total']).sum()) if len(adb) > 0 else 0))
@@ -605,65 +650,24 @@ def page_recon(fdf, raw_summary):
         with qs4:
             st.metric("Nome Incorreto", fmt(int((~adb['name_eq_total']).sum()) if len(adb) > 0 else 0))
 
-        detail_filter = st.selectbox("Filtro rápido:", [
-            "Todos", "Isn't in all DBs", "Sort Code Incorreto",
-            "Cargo Incorreto", "Nome Incorreto",
-        ], key=f"detail_{key_suffix}")
-
-        show_df = sub_df.copy()
-        if detail_filter == "Isn't in all DBs":
-            show_df = show_df[~show_df['all_dbs']]
-        elif detail_filter == "Sort Code Incorreto":
-            show_df = show_df[show_df['all_dbs'] & ~show_df['loc_eq_total']]
-        elif detail_filter == "Cargo Incorreto":
-            show_df = show_df[show_df['all_dbs'] & ~show_df['func_eq_total']]
-        elif detail_filter == "Nome Incorreto":
-            show_df = show_df[show_df['all_dbs'] & ~show_df['name_eq_total']]
-
-        show_cols = ['staff_id', 'sot_name', 'spx', 'bpo', 'active',
-                     'in_hr', 'in_att', 'in_perf', 'all_dbs',
-                     'loc_sot', 'loc_type', 'loc_eq_total',
-                     'sot_func', 'func_eq_total',
-                     'same_hub', 'moving', 'new_hub']
-        if 'bpo_name' in show_df.columns:
-            show_cols += ['bpo_name', 'categoria', 'tipo_contrato', 'status_hr']
-
-        display_df = show_df[[c for c in show_cols if c in show_df.columns]].copy()
-        rename = {
-            'staff_id': 'Staff ID', 'sot_name': 'Nome (SoT)',
-            'spx': 'FTE', 'bpo': 'BPO', 'active': 'Active',
-            'in_hr': 'In HR', 'in_att': 'In Att', 'in_perf': 'In Perf',
-            'all_dbs': 'All DBs', 'loc_sot': 'Location SoT',
-            'loc_type': 'Site Type', 'loc_eq_total': 'Sort Code OK',
-            'sot_func': 'Cargo (SoT)', 'func_eq_total': 'Cargo OK',
-            'same_hub': 'Same Hub', 'moving': 'Moving', 'new_hub': 'New Hub',
-            'bpo_name': 'BPO Name', 'categoria': 'Categoria',
-            'tipo_contrato': 'Tipo Contrato', 'status_hr': 'Status HR',
-        }
-        display_df = display_df.rename(columns=rename)
+        display_df = build_display_df(sub_df)
         st.dataframe(display_df, use_container_width=True, height=450, hide_index=True)
+        render_export_buttons(display_df, key_suffix)
 
-        csv = display_df.to_csv(index=False).encode('utf-8')
-        st.download_button(
-            f"📥 Exportar CSV ({len(display_df):,} linhas)",
-            csv, f"recon_{key_suffix}.csv", "text/csv",
-            use_container_width=True, key=f"csv_{key_suffix}")
-
-    with sub_todos:
+    with sub_all:
         render_recon_table(fdf, "todos")
+    with sub_active:
+        render_recon_table(fdf[fdf['active']], "actives")
+    with sub_inactive:
+        render_recon_table(fdf[~fdf['active']], "inactives")
+    with sub_sc:
+        render_recon_table(fdf[fdf['all_dbs'] & ~fdf['loc_eq_total']], "incorrect_sc")
+    with sub_nodb:
+        render_recon_table(fdf[~fdf['all_dbs']], "not_in_db")
 
-    with sub_deslig:
-        render_recon_table(fdf[~fdf['active']], "deslig")
-
-    with sub_admis:
-        render_recon_table(fdf[fdf['in_hr'] & ~fdf['all_dbs'] & fdf['active']], "admis")
-
-    with sub_mud:
-        render_recon_table(fdf[fdf['moving']], "mud")
-
-    # ── Tabela Original Ind. Summary ──
+    # ── Tabela Original Ind. Summary + Drill-Down ──
     st.markdown("---")
-    with st.expander("📋 Tabela Original - Ind. Summary"):
+    with st.expander("📋 Tabela Original - Ind. Summary (clique para drill-down)"):
         if not raw_summary:
             st.warning("Ind. Summary não carregou.")
         else:
@@ -718,6 +722,64 @@ def page_recon(fdf, raw_summary):
             html += '</table></div>'
             st.markdown(html, unsafe_allow_html=True)
 
+            # ── Drill-Down ──
+            st.markdown("---")
+            st.markdown("##### 🔍 Drill-Down - Ver colaboradores")
+            dd1, dd2, dd3 = st.columns(3)
+            with dd1:
+                dd_op = st.selectbox("Operação:", ["All", "FMH", "HUB", "SOC", "Almox", "CB", "RTS"],
+                                     key="dd_op")
+            with dd2:
+                dd_type = st.selectbox("Tipo:", ["FTE + BPO", "FTE", "BPO"], key="dd_type")
+            with dd3:
+                dd_kpi = st.selectbox("KPI:", [
+                    "Active - In all DBs",
+                    "Active - Isn't in all DBs",
+                    "Active - Not in HR",
+                    "Active - Not in Attendance",
+                    "Active - Not in Performance",
+                    "Active - Incorrect Sort Code",
+                    "Active - Incorrect Name",
+                    "Active - Incorrect Cargo",
+                    "Active - Moving",
+                    "Inactive",
+                ], key="dd_kpi")
+
+            dd_df = fdf.copy()
+            if dd_op != "All":
+                dd_df = dd_df[dd_df['loc_type'] == dd_op]
+            if dd_type == "FTE":
+                dd_df = dd_df[dd_df['spx']]
+            elif dd_type == "BPO":
+                dd_df = dd_df[dd_df['bpo']]
+
+            if dd_kpi == "Active - In all DBs":
+                dd_df = dd_df[dd_df['active'] & dd_df['all_dbs']]
+            elif dd_kpi == "Active - Isn't in all DBs":
+                dd_df = dd_df[dd_df['active'] & ~dd_df['all_dbs']]
+            elif dd_kpi == "Active - Not in HR":
+                dd_df = dd_df[dd_df['active'] & ~dd_df['in_hr']]
+            elif dd_kpi == "Active - Not in Attendance":
+                dd_df = dd_df[dd_df['active'] & ~dd_df['in_att']]
+            elif dd_kpi == "Active - Not in Performance":
+                dd_df = dd_df[dd_df['active'] & ~dd_df['in_perf']]
+            elif dd_kpi == "Active - Incorrect Sort Code":
+                dd_df = dd_df[dd_df['active'] & dd_df['all_dbs'] & ~dd_df['loc_eq_total']]
+            elif dd_kpi == "Active - Incorrect Name":
+                dd_df = dd_df[dd_df['active'] & dd_df['all_dbs'] & ~dd_df['name_eq_total']]
+            elif dd_kpi == "Active - Incorrect Cargo":
+                dd_df = dd_df[dd_df['active'] & dd_df['all_dbs'] & ~dd_df['func_eq_total']]
+            elif dd_kpi == "Active - Moving":
+                dd_df = dd_df[dd_df['active'] & dd_df['moving']]
+            elif dd_kpi == "Inactive":
+                dd_df = dd_df[~dd_df['active']]
+
+            st.caption(f"{len(dd_df):,} colaboradores encontrados")
+            if len(dd_df) > 0:
+                dd_display = build_display_df(dd_df)
+                st.dataframe(dd_display, use_container_width=True, height=350, hide_index=True)
+                render_export_buttons(dd_display, "drilldown")
+
 
 # ═══════════════════════════════════════════════════════════════════════════════
 #  PAGE: CONSULTA COLABORADOR(A)
@@ -752,12 +814,113 @@ def page_consulta(df):
 
     st.success(f"{len(results)} resultado(s) encontrado(s)")
 
+    # Export results
+    res_display = build_display_df(results)
+    render_export_buttons(res_display, "consulta")
+
+    st.markdown("---")
+
     if len(results) > 50:
         st.warning("Muitos resultados. Mostrando os primeiros 50. Refine a busca.")
         results = results.head(50)
 
     for _, person in results.iterrows():
         st.markdown(render_employee_card(person), unsafe_allow_html=True)
+
+
+# ═══════════════════════════════════════════════════════════════════════════════
+#  PAGE: GUIA DE USO
+# ═══════════════════════════════════════════════════════════════════════════════
+def page_guia():
+    st.markdown("#### 📖 Guia de Uso")
+    st.markdown("---")
+
+    st.markdown("##### Fontes de Dados")
+    st.markdown("""
+Este dashboard consolida dados de **3 abas** da planilha de Reconciliation:
+
+| Fonte | Aba (gid) | Descrição |
+|-------|-----------|-----------|
+| **CrossCheck** | `358464056` | Tabela principal de reconciliação. Cruza dados de HR, Attendance e Performance para cada colaborador (staff\_id). Contém ~40K linhas com flags booleanas (in\_hr, in\_att, in\_perf, etc.), nomes, cargos, sort codes e CNPJs de cada base. |
+| **HR** | `0` | Base de dados de Recursos Humanos. Fornece dados complementares: nome do BPO, Categoria HC, Tipo de Contrato e Status HR. Usada para enriquecer filtros da sidebar. |
+| **Ind. Summary** | `2047376970` | Tabela resumo por operação (FMH, SOC, HUB, Almox, CB, RTS) com contagens de HR, Attendance, Performance e Total para cada KPI. Exibida na aba Recon com possibilidade de drill-down. |
+""")
+
+    st.markdown("##### Como os Dados São Processados")
+    st.markdown("""
+1. **CrossCheck** é carregada com cabeçalho na **linha 4** (row index 3) e dados a partir da **linha 5**.
+   Colunas booleanas (TRUE/FALSE) são convertidas para `bool` do Python.
+   Linhas com `staff_id` vazio ou "-" são removidas.
+
+2. **HR** é carregada e faz-se merge com CrossCheck via `staff_id` (left join),
+   adicionando colunas: `bpo_name`, `categoria`, `tipo_contrato`, `status_hr`.
+
+3. **Filtros da sidebar** são aplicados sobre o DataFrame combinado.
+
+4. **Cache**: Dados ficam em cache por **5 minutos** (`ttl=300`). Use o botão
+   "🔄 Atualizar Dados" na sidebar para forçar recarga.
+""")
+
+    st.markdown("##### Navegação")
+    st.markdown("""
+- **📊 Gráficos** — KPIs principais (Total, Active, Inactive, FTE, BPO, por database)
+  e gráficos interativos (HC por Database, HC por Site Type, FTE vs BPO, Divergências, Sort Code).
+- **📋 Recon** — Tabela resumo tipo report, sub-abas (Todos, Actives, Inactives,
+  Incorrect Sort Codes, Isn't in DB), tabela original Ind. Summary com drill-down.
+- **🔍 Consulta Colaborador(a)** — Busca individual por Staff ID, Nome ou CPF/CNPJ.
+  Exibe card detalhado com dados de cada base (HR, Attendance, Performance).
+- **📖 Guia de Uso** — Esta página.
+- **📚 Glossário** — Definições de termos e siglas.
+""")
+
+    st.markdown("##### Exportação")
+    st.markdown("""
+- **CSV**: Download direto pelo navegador.
+- **Google Sheets**: Cria uma nova planilha no Google Drive com os dados filtrados.
+  A planilha é compartilhada como "Qualquer pessoa com o link pode visualizar".
+""")
+
+
+# ═══════════════════════════════════════════════════════════════════════════════
+#  PAGE: GLOSSÁRIO
+# ═══════════════════════════════════════════════════════════════════════════════
+def page_glossario():
+    st.markdown("#### 📚 Glossário")
+    st.markdown("---")
+
+    terms = [
+        ("FMH", "First Mile Hub", "Hub de primeira milha — ponto de coleta inicial dos pacotes."),
+        ("HUB", "Hub (Centro de Distribuição)", "Centro de triagem e distribuição intermediário."),
+        ("SOC", "Sorting Center", "Centro de triagem automatizada de pacotes."),
+        ("Almox", "Almoxarifado", "Estoque / depósito de materiais e insumos."),
+        ("CB", "Cross Belt", "Esteira de triagem com belts cruzados para separação automatizada."),
+        ("RTS", "Return to Sender", "Operação de devolução de pacotes ao remetente."),
+        ("FTE", "Full-Time Employee", "Colaborador contratado diretamente (CLT SPX). No dashboard, aparece como 'SPX = TRUE'."),
+        ("BPO", "Business Process Outsourcing", "Colaborador terceirizado. No dashboard, aparece como 'BPO = TRUE'."),
+        ("HC", "Headcount", "Contagem de pessoas / colaboradores."),
+        ("SoT", "Source of Truth", "Fonte da verdade — qual base de dados tem prioridade para cada campo (nome, cargo, sort code). As regras variam por tipo de HC (FTE/BPO) e situação (same CNPJ, moving, etc.)."),
+        ("Sort Code", "Sort Code (Código de Localidade)", "Código que identifica a unidade/localidade onde o colaborador está alocado. Cada base (HR, Att, Perf) possui seu próprio sort code."),
+        ("CNPJ", "Cadastro Nacional da Pessoa Jurídica", "Identificador fiscal da empresa. Usado para verificar se o colaborador está no mesmo CNPJ nas bases."),
+        ("CPF", "Cadastro de Pessoas Físicas", "Identificador fiscal individual do colaborador."),
+        ("Staff ID", "Staff ID", "Identificador único do colaborador no sistema HR."),
+        ("In HR / In Att / In Perf", "Presença nas Bases", "Indica se o colaborador foi encontrado na base de HR, Attendance ou Performance, respectivamente."),
+        ("All DBs", "In All Databases", "TRUE se o colaborador está presente em todas as 3 bases (HR, Attendance, Performance)."),
+        ("Moving", "Em Movimentação", "Colaborador que está em processo de transferência entre unidades."),
+        ("New Hub", "Novo Hub", "Indica se o colaborador foi alocado em um hub recém-criado."),
+        ("Same Hub", "Mesmo Hub", "Indica se o sort code aponta para o mesmo hub em todas as bases."),
+        ("Incorrect Sort Code", "Sort Code Divergente", "O sort code do colaborador não é igual em todas as bases (HR ≠ Att ≠ Perf)."),
+        ("Isn't in DB", "Não Está na Base", "Colaborador ativo que não foi encontrado em pelo menos uma das 3 bases."),
+        ("Ind. Summary", "Individual Summary", "Tabela resumo com contagens agregadas por operação e KPI."),
+    ]
+
+    for sigla, nome, desc in terms:
+        st.markdown(
+            f'<div style="background:#f8f9fb;border-radius:8px;padding:10px 14px;'
+            f'margin-bottom:8px;border-left:3px solid {NAVY};">'
+            f'<b style="color:{ORANGE};font-size:14px;">{sigla}</b> '
+            f'<span style="color:{NAVY};font-size:13px;">— {nome}</span><br>'
+            f'<span style="font-size:12px;color:#555;">{desc}</span></div>',
+            unsafe_allow_html=True)
 
 
 # ═══════════════════════════════════════════════════════════════════════════════
@@ -849,8 +1012,9 @@ def main():
     st.caption(f"CrossCheck: {len(fdf):,} registros (de {len(df):,} total)")
 
     # ── Main Navigation (pill tabs) ──
-    tab_graficos, tab_recon, tab_consulta = st.tabs([
-        "📊 Gráficos", "📋 Recon", "🔍 Consulta Colaborador(a)"])
+    tab_graficos, tab_recon, tab_consulta, tab_guia, tab_glossario = st.tabs([
+        "📊 Gráficos", "📋 Recon", "🔍 Consulta Colaborador(a)",
+        "📖 Guia de Uso", "📚 Glossário"])
 
     with tab_graficos:
         page_graficos(fdf)
@@ -861,8 +1025,14 @@ def main():
     with tab_consulta:
         page_consulta(df)
 
+    with tab_guia:
+        page_guia()
+
+    with tab_glossario:
+        page_glossario()
+
     st.markdown("")
-    st.caption("v3.0 · Dados cached 5 min · Fonte: CrossCheck + Ind.Summary + HR")
+    st.caption("v4.1 · Dados cached 5 min · Fonte: CrossCheck + Ind.Summary + HR")
 
 
 if __name__ == '__main__':
