@@ -253,7 +253,7 @@ def load_hc_growth():
         gc = get_gc()
         sp = gc.open_by_key(GROWTH_SID)
     except Exception:
-        return None, None
+        return None, None, None
 
     date_tabs = []
     for ws in sp.worksheets():
@@ -265,11 +265,25 @@ def load_hc_growth():
 
     date_tabs.sort(key=lambda x: (x['month'], x['day']))
     if len(date_tabs) < 2:
-        return None, None
+        return None, None, None
 
     COL_R_REL = 15  # Column R relative to column C (index 2)
+
+    # Group column definitions (relative to column C = index 2)
+    GRP_COLS = {
+        'All':   [0, 1, 2, 3],
+        'FMH':   [5, 6, 7, 8],
+        'SOC':   [10, 11, 12, 13],
+        'HUB':   [15, 16, 17, 18],
+        'Almox': [20, 21, 22, 23],
+        'CB':    [25, 26, 27, 28],
+        'RTS':   [30, 31, 32, 33],
+    }
+    SUBCOLS = ['HR', 'Att', 'Perf', 'Total']
+
     labels = None
     periods = []
+    grp_periods = {(g, s): [] for g in GRP_COLS for s in SUBCOLS}
 
     for tab in date_tabs:
         raw = tab['ws'].get_all_values()
@@ -280,6 +294,8 @@ def load_hc_growth():
                 break
         rows = raw[start:]
         t_labels, t_vals = [], []
+        grp_vals = {(g, s): [] for g in GRP_COLS for s in SUBCOLS}
+
         for row in rows:
             lbl = row[1] if len(row) > 1 else ''
             vals = row[2:] if len(row) > 2 else []
@@ -290,13 +306,27 @@ def load_hc_growth():
                 v = 0
             t_labels.append(lbl)
             t_vals.append(v)
+
+            for grp, col_idxs in GRP_COLS.items():
+                for si, ci in enumerate(col_idxs):
+                    sc = SUBCOLS[si]
+                    raw_v = vals[ci] if ci < len(vals) else ''
+                    try:
+                        gv = float(raw_v.replace(',', '').replace(' ', '')) if raw_v.strip() else 0
+                    except Exception:
+                        gv = 0
+                    grp_vals[(grp, sc)].append(gv)
+
         if labels is None:
             labels = t_labels
+        p_label = f"{tab['day']:02d}/{tab['month']:02d}"
         periods.append({
             'name': tab['name'],
-            'label': f"{tab['day']:02d}/{tab['month']:02d}",
+            'label': p_label,
             'values': t_vals,
         })
+        for key in grp_vals:
+            grp_periods[key].append({'label': p_label, 'values': grp_vals[key]})
 
     n = len(labels)
 
@@ -337,7 +367,16 @@ def load_hc_growth():
     np_ = len(periods) - 1
     var_df['Média'] = [a / np_ if a is not None else None for a in acum]
 
-    return abs_df, var_df
+    # Build perf_data: (group, subcol) -> DataFrame with KPI rows × period columns
+    perf_data = {}
+    for (grp, sc), p_list in grp_periods.items():
+        pdf = pd.DataFrame({'KPI': labels})
+        for p in p_list:
+            v = p['values'] + [0] * max(0, n - len(p['values']))
+            pdf[p['label']] = v[:n]
+        perf_data[(grp, sc)] = pdf
+
+    return abs_df, var_df, perf_data
 
 
 # ═══════════════════════════════════════════════════════════════════════════════
@@ -1093,6 +1132,237 @@ def page_hc_growth(abs_df, var_df):
 
 
 # ═══════════════════════════════════════════════════════════════════════════════
+#  PAGE: PERFORMANCE HUBS
+# ═══════════════════════════════════════════════════════════════════════════════
+PERF_GROUPS_ORDER = ['All', 'FMH', 'SOC', 'HUB', 'Almox', 'CB', 'RTS']
+PERF_SUBCOLS = ['HR', 'Att', 'Perf', 'Total']
+
+
+def page_performance(perf_data):
+    st.markdown("#### 🏢 Performance Hubs")
+
+    if perf_data is None:
+        st.warning("Dados de Performance Hubs não disponíveis. Verifique se a planilha HC Growth "
+                    "possui pelo menos 2 abas no formato DDMM.")
+        return
+
+    sample_key = list(perf_data.keys())[0]
+    sample_df = perf_data[sample_key]
+    period_cols = [c for c in sample_df.columns if c != 'KPI']
+    if not period_cols:
+        st.warning("Nenhum período disponível.")
+        return
+    latest = period_cols[-1]
+    prev = period_cols[-2] if len(period_cols) >= 2 else None
+    kpis = sample_df['KPI'].tolist()
+
+    # Find key row indices
+    hc_idx = active_idx = None
+    for i, k in enumerate(kpis):
+        if k.strip() == '# of HCs':
+            hc_idx = i
+        if k == '   Active':
+            active_idx = i
+    target_idx = active_idx if active_idx is not None else (hc_idx if hc_idx is not None else 0)
+
+    # ── KPI Cards: HRIS / Att / Perf / Total (All) ──
+    st.markdown(f"##### Visão Geral — Active ({latest})")
+    cols = st.columns(4)
+    sc_colors = [NAVY, CYAN, ORANGE, BLUE]
+    for col, sc, color in zip(cols, PERF_SUBCOLS, sc_colors):
+        key = ('All', sc)
+        val = perf_data[key].loc[target_idx, latest] if key in perf_data else 0
+        var_val = None
+        if prev and key in perf_data:
+            pv = perf_data[key].loc[target_idx, prev]
+            if pv != 0:
+                var_val = ((val - pv) / pv) * 100
+        var_str = f"{var_val:+.1f}%" if var_val is not None else "N/A"
+        arrow = "↑" if var_val and var_val > 0 else ("↓" if var_val and var_val < 0 else "→")
+        col.markdown(
+            f'<div class="kpi" style="background:{color}">'
+            f'<h4>{sc} (Active)</h4><h2>{fmt(val)}</h2>'
+            f'<span style="font-size:11px;opacity:.85">{arrow} {var_str}</span>'
+            f'</div>', unsafe_allow_html=True)
+
+    st.markdown("")
+
+    # ── Overview Table: all operations × HRIS/Att/Perf/Total ──
+    st.markdown(f"##### Breakdown por Operação — Active ({latest})")
+    h = ('<div style="overflow-x:auto;border-radius:8px;border:1px solid #e0e4e8;">'
+         '<table class="rtable"><tr>'
+         '<th style="text-align:left;min-width:100px">Operação</th>')
+    for sc in PERF_SUBCOLS:
+        h += f'<th class="gh">{sc}</th>'
+    h += '<th>Var% Total</th></tr>'
+
+    for grp in PERF_GROUPS_ORDER:
+        is_focus = grp in ('FMH', 'HUB')
+        row_style = ' style="background:#e8f0fe;"' if is_focus else ''
+        h += f'<tr{row_style}><td><b>{grp}</b></td>'
+        for sc in PERF_SUBCOLS:
+            key = (grp, sc)
+            if key in perf_data and target_idx < len(perf_data[key]):
+                val = perf_data[key].loc[target_idx, latest]
+                cls = f'style="color:{GRAY}"' if val == 0 else ''
+                h += f'<td {cls}>{fmt(val)}</td>'
+            else:
+                h += '<td>-</td>'
+        # Var% Total (latest vs previous)
+        total_key = (grp, 'Total')
+        if prev and total_key in perf_data and target_idx < len(perf_data[total_key]):
+            cv = perf_data[total_key].loc[target_idx, latest]
+            pv = perf_data[total_key].loc[target_idx, prev]
+            if pv != 0:
+                vr = ((cv - pv) / pv) * 100
+                color = CYAN if vr <= 0 else RED
+                h += f'<td style="color:{color};font-weight:600">{vr:+.1f}%</td>'
+            else:
+                h += f'<td style="color:{GOLD};font-style:italic">N/A</td>'
+        else:
+            h += '<td>-</td>'
+        h += '</tr>'
+    h += '</table></div>'
+    st.markdown(h, unsafe_allow_html=True)
+
+    st.markdown("---")
+
+    # ── FMH & HUB Detail Tabs ──
+    st.markdown("##### Detalhe — FMH & HUB")
+    tab_fmh, tab_hub = st.tabs(["FMH", "HUB"])
+
+    for tab, grp_name in [(tab_fmh, 'FMH'), (tab_hub, 'HUB')]:
+        with tab:
+            # KPI cards
+            kcols = st.columns(4)
+            for kcol, sc, color in zip(kcols, PERF_SUBCOLS, sc_colors):
+                key = (grp_name, sc)
+                val = perf_data[key].loc[target_idx, latest] if key in perf_data else 0
+                var_val = None
+                if prev and key in perf_data:
+                    pv = perf_data[key].loc[target_idx, prev]
+                    if pv != 0:
+                        var_val = ((val - pv) / pv) * 100
+                var_str = f"{var_val:+.1f}%" if var_val is not None else "N/A"
+                arrow = "↑" if var_val and var_val > 0 else ("↓" if var_val and var_val < 0 else "→")
+                kcol.markdown(
+                    f'<div class="kpi" style="background:{color}">'
+                    f'<h4>{sc} (Active)</h4><h2>{fmt(val)}</h2>'
+                    f'<span style="font-size:11px;opacity:.85">{arrow} {var_str}</span>'
+                    f'</div>', unsafe_allow_html=True)
+
+            st.markdown("")
+
+            # Detail table: KPI × (HR, Att, Perf, Total) for latest period
+            st.markdown(f"###### Tabela Detalhada — {grp_name} ({latest})")
+            h = ('<div style="overflow-x:auto;max-height:500px;overflow-y:auto;'
+                 'border-radius:8px;border:1px solid #e0e4e8;">'
+                 '<table class="rtable"><tr>'
+                 '<th style="text-align:left;min-width:250px">KPI</th>')
+            for sc in PERF_SUBCOLS:
+                h += f'<th>{sc}</th>'
+            h += '</tr>'
+            for i, kpi in enumerate(kpis):
+                if not kpi.strip():
+                    h += '<tr class="sep"><td colspan="100"></td></tr>'
+                    continue
+                lvl = indent_level(kpi)
+                lbl = f'<span style="padding-left:{lvl*16}px">{kpi.strip()}</span>'
+                h += f'<tr class="lv{min(lvl, 4)}"><td>{lbl}</td>'
+                for sc in PERF_SUBCOLS:
+                    key = (grp_name, sc)
+                    if key in perf_data and i < len(perf_data[key]):
+                        val = perf_data[key].loc[i, latest]
+                        cls = f'style="color:{GRAY}"' if val == 0 else ''
+                        h += f'<td {cls}>{fmt(val)}</td>'
+                    else:
+                        h += '<td>-</td>'
+                h += '</tr>'
+            h += '</table></div>'
+            st.markdown(h, unsafe_allow_html=True)
+
+            st.markdown("---")
+
+            # Historical evolution chart for Total subcol
+            st.markdown(f"###### Evolução Temporal — {grp_name}")
+            ch1, ch2 = st.columns(2)
+            with ch1:
+                st.markdown("**Total (Active)**")
+                total_key = (grp_name, 'Total')
+                if total_key in perf_data:
+                    tdf = perf_data[total_key]
+                    chart_kpis = []
+                    for i, k in enumerate(kpis):
+                        s = k.strip()
+                        if s in ('# of HCs', 'Active', 'Inactive'):
+                            chart_kpis.append((i, s))
+                    if chart_kpis:
+                        fig = go.Figure()
+                        ccolors = [NAVY, CYAN, RED]
+                        for ci, (idx, name) in enumerate(chart_kpis):
+                            values = [tdf.loc[idx, c] for c in period_cols]
+                            fig.add_trace(go.Scatter(
+                                x=period_cols, y=values,
+                                mode='lines+markers+text', name=name,
+                                line=dict(color=ccolors[ci % len(ccolors)], width=2),
+                                text=[fmt(v) for v in values],
+                                textposition='top center', textfont=dict(size=9)))
+                        fig.update_layout(
+                            height=300, margin=dict(l=10, r=10, t=40, b=30),
+                            font=dict(size=11), xaxis_title="Período",
+                            legend=dict(orientation="h", y=1.15, x=0.5, xanchor="center"))
+                        st.plotly_chart(fig, use_container_width=True, key=f"perf_total_{grp_name}")
+
+            with ch2:
+                st.markdown("**HR / Att / Perf (Active)**")
+                if active_idx is not None:
+                    fig2 = go.Figure()
+                    sc_colors_chart = [NAVY, CYAN, ORANGE]
+                    for si, sc in enumerate(['HR', 'Att', 'Perf']):
+                        key = (grp_name, sc)
+                        if key in perf_data:
+                            values = [perf_data[key].loc[active_idx, c] for c in period_cols]
+                            fig2.add_trace(go.Scatter(
+                                x=period_cols, y=values,
+                                mode='lines+markers+text', name=sc,
+                                line=dict(color=sc_colors_chart[si], width=2),
+                                text=[fmt(v) for v in values],
+                                textposition='top center', textfont=dict(size=9)))
+                    fig2.update_layout(
+                        height=300, margin=dict(l=10, r=10, t=40, b=30),
+                        font=dict(size=11), xaxis_title="Período",
+                        legend=dict(orientation="h", y=1.15, x=0.5, xanchor="center"))
+                    st.plotly_chart(fig2, use_container_width=True, key=f"perf_db_{grp_name}")
+
+            # Historical table: periods as columns, Total values
+            with st.expander(f"📊 Evolução {grp_name} — Valores por Período (Total)"):
+                total_key = (grp_name, 'Total')
+                if total_key in perf_data:
+                    tdf = perf_data[total_key]
+                    h2 = ('<div style="overflow-x:auto;max-height:500px;overflow-y:auto;'
+                          'border-radius:8px;border:1px solid #e0e4e8;">'
+                          '<table class="rtable"><tr>'
+                          '<th style="text-align:left;min-width:250px">KPI</th>')
+                    for pc in period_cols:
+                        h2 += f'<th>{pc}</th>'
+                    h2 += '</tr>'
+                    for i, kpi in enumerate(kpis):
+                        if not kpi.strip():
+                            h2 += '<tr class="sep"><td colspan="100"></td></tr>'
+                            continue
+                        lvl = indent_level(kpi)
+                        lbl = f'<span style="padding-left:{lvl*16}px">{kpi.strip()}</span>'
+                        h2 += f'<tr class="lv{min(lvl, 4)}"><td>{lbl}</td>'
+                        for pc in period_cols:
+                            val = tdf.loc[i, pc] if i < len(tdf) else 0
+                            cls = f'style="color:{GRAY}"' if val == 0 else ''
+                            h2 += f'<td {cls}>{fmt(val)}</td>'
+                        h2 += '</tr>'
+                    h2 += '</table></div>'
+                    st.markdown(h2, unsafe_allow_html=True)
+
+
+# ═══════════════════════════════════════════════════════════════════════════════
 #  PAGE: GUIA DE USO
 # ═══════════════════════════════════════════════════════════════════════════════
 def page_guia():
@@ -1133,6 +1403,8 @@ Este dashboard consolida dados de **3 abas** da planilha de Reconciliation:
   Wrong Staff ID, Isn't in DB), tabela original Ind. Summary com drill-down.
 - **📈 HC Growth** — Evolução de KPIs ao longo dos períodos (abas DDMM da planilha
   de acompanhamento). Gráfico de linha, tabela de variação % e valores absolutos.
+- **🏢 Performance Hubs** — Breakdown de HRIS, Attendance, Performance e Total
+  por operação (FMH, HUB, SOC, etc.). Detalhe completo e evolução temporal para FMH e HUB.
 - **🔍 Consulta Colaborador(a)** — Busca individual por Staff ID, Nome ou CPF/CNPJ.
   Exibe card detalhado com dados de cada base (HR, Attendance, Performance).
 - **📖 Guia de Uso** — Esta página.
@@ -1196,7 +1468,7 @@ def main():
     df_cc = load_crosscheck()
     df_hr = load_hr()
     raw_summary = load_ind_summary()
-    abs_growth, var_growth = load_hc_growth()
+    abs_growth, var_growth, perf_data = load_hc_growth()
 
     if df_cc.empty:
         st.error("Erro ao carregar CrossCheck.")
@@ -1279,8 +1551,8 @@ def main():
     st.caption(f"CrossCheck: {len(fdf):,} registros (de {len(df):,} total)")
 
     # ── Main Navigation (pill tabs) ──
-    tab_graficos, tab_recon, tab_growth, tab_consulta, tab_guia, tab_glossario = st.tabs([
-        "📊 Gráficos", "📋 Recon", "📈 HC Growth",
+    tab_graficos, tab_recon, tab_growth, tab_perf, tab_consulta, tab_guia, tab_glossario = st.tabs([
+        "📊 Gráficos", "📋 Recon", "📈 HC Growth", "🏢 Performance Hubs",
         "🔍 Consulta Colaborador(a)", "📖 Guia de Uso", "📚 Glossário"])
 
     with tab_graficos:
@@ -1292,6 +1564,9 @@ def main():
     with tab_growth:
         page_hc_growth(abs_growth, var_growth)
 
+    with tab_perf:
+        page_performance(perf_data)
+
     with tab_consulta:
         page_consulta(df)
 
@@ -1302,7 +1577,7 @@ def main():
         page_glossario()
 
     st.markdown("")
-    st.caption("v4.2 · Dados cached 5 min · Fonte: CrossCheck + Ind.Summary + HR + HC Growth")
+    st.caption("v4.3 · Dados cached 5 min · Fonte: CrossCheck + Ind.Summary + HR + HC Growth")
 
 
 if __name__ == '__main__':
