@@ -137,7 +137,11 @@ TOKEN_FILE = r"c:\Users\SPXBR26731\OneDrive - Seagroup\Área de Trabalho\codes\t
 
 
 def get_gc():
-    if "gcp_service_account" in st.secrets:
+    try:
+        has_sa = "gcp_service_account" in st.secrets
+    except Exception:
+        has_sa = False
+    if has_sa:
         from google.oauth2.service_account import Credentials as SA
         return gspread.authorize(SA.from_service_account_info(
             st.secrets["gcp_service_account"], scopes=SCOPES))
