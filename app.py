@@ -35,9 +35,11 @@ st.markdown(f"""
     section[data-testid="stSidebar"] {{ background: {NAVY}; }}
     section[data-testid="stSidebar"] * {{ color: white !important; }}
     section[data-testid="stSidebar"] label {{ font-size: 13px !important; }}
+    section[data-testid="stSidebar"] [data-baseweb="select"] * {{ color: black !important; }}
     section[data-testid="stSidebar"] .stMultiSelect [data-baseweb="tag"] {{
         background: {ORANGE} !important;
     }}
+    section[data-testid="stSidebar"] .stMultiSelect [data-baseweb="tag"] * {{ color: white !important; }}
     /* ── Tabs as pill buttons ── */
     .stTabs [data-baseweb="tab-list"] {{
         gap: 2px;
@@ -46,9 +48,9 @@ st.markdown(f"""
         padding: 4px;
     }}
     .stTabs [data-baseweb="tab"] {{
-        padding: 10px 28px;
+        padding: 10px 18px;
         border-radius: 30px;
-        font-size: 14px;
+        font-size: 13px;
         font-weight: 500;
         color: #555;
         background: transparent;
@@ -724,14 +726,19 @@ def page_graficos(fdf):
 def page_recon(fdf, raw_summary):
     # ── Report Summary Table ──
     st.markdown("#### Resumo para Report")
-    ops_report = ['FMH', 'HUB', 'SOC', 'Almox', 'CB', 'RTS', 'Total']
+    ops_report = ['FMH', 'HUB', 'HUB (Total)', 'SOC', 'Almox', 'CB', 'RTS', 'Total']
     active_ftes = fdf[(fdf['active']) & (fdf['spx'])]
     active_bpos = fdf[(fdf['active']) & (fdf['bpo'])]
 
     def count_by_op(subset, condition_fn, ops):
         result = {}
         for op in ops:
-            grp = subset if op == 'Total' else subset[subset['loc_type'] == op]
+            if op == 'Total':
+                grp = subset
+            elif op == 'HUB (Total)':
+                grp = subset[subset['loc_type'].isin(['FMH', 'HUB'])]
+            else:
+                grp = subset[subset['loc_type'] == op]
             result[op] = int(condition_fn(grp)) if len(grp) > 0 else 0
         return result
 
@@ -783,6 +790,22 @@ def page_recon(fdf, raw_summary):
             st.metric("Cargo Incorreto", fmt(int((~adb['func_eq_total']).sum()) if len(adb) > 0 else 0))
         with qs4:
             st.metric("Nome Incorreto", fmt(int((~adb['name_eq_total']).sum()) if len(adb) > 0 else 0))
+
+        # Breakdown by operation
+        if len(sub_df) > 0:
+            op_tags = ['FMH', 'HUB', 'HUB (Total)', 'SOC', 'Almox', 'CB', 'RTS']
+            op_html = '<div style="display:flex;gap:6px;flex-wrap:wrap;margin:8px 0;">'
+            for op in op_tags:
+                if op == 'HUB (Total)':
+                    c = len(sub_df[sub_df['loc_type'].isin(['FMH', 'HUB'])])
+                else:
+                    c = len(sub_df[sub_df['loc_type'] == op])
+                bg = ORANGE if c > 0 else LGRAY
+                op_html += (f'<span style="background:{bg};color:white;padding:4px 12px;'
+                            f'border-radius:12px;font-size:11px;font-weight:600;">'
+                            f'{op}: {c:,}</span>')
+            op_html += '</div>'
+            st.markdown(op_html, unsafe_allow_html=True)
 
         display_df = build_display_df(sub_df)
         st.dataframe(display_df, use_container_width=True, height=450, hide_index=True)
@@ -1552,8 +1575,8 @@ def main():
 
     # ── Main Navigation (pill tabs) ──
     tab_graficos, tab_recon, tab_growth, tab_perf, tab_consulta, tab_guia, tab_glossario = st.tabs([
-        "📊 Gráficos", "📋 Recon", "📈 HC Growth", "🏢 Performance Hubs",
-        "🔍 Consulta Colaborador(a)", "📖 Guia de Uso", "📚 Glossário"])
+        "📊 Gráficos", "📋 Recon", "📈 HC Growth", "🏢 Perf. Hubs",
+        "🔍 Consulta", "📖 Guia", "📚 Glossário"])
 
     with tab_graficos:
         page_graficos(fdf)
