@@ -172,6 +172,7 @@ def get_gc():
 #  DATA LOADING
 # ═══════════════════════════════════════════════════════════════════════════════
 SID = "1f3RtvA7F2SCdJ5XJkhXh0W8JOb6qnuyDj1zzhB1BanY"
+GROWTH_SID = "1fMgeB-AMfq0_mGzwLjAK-dEBoECUJNeAEhdJSJ1cwM0"
 
 
 @st.cache_data(ttl=300, show_spinner="Carregando CrossCheck...")
@@ -243,6 +244,97 @@ def load_ind_summary():
         if w.id == 2047376970:
             return w.get_all_values()
     return []
+
+
+@st.cache_data(ttl=300, show_spinner="Carregando HC Growth...")
+def load_hc_growth():
+    """Load DDMM date tabs from HC Growth spreadsheet and compute comparisons."""
+    gc = get_gc()
+    sp = gc.open_by_key(GROWTH_SID)
+
+    date_tabs = []
+    for ws in sp.worksheets():
+        t = ws.title
+        if len(t) == 4 and t.isdigit():
+            d, m = int(t[:2]), int(t[2:])
+            if 1 <= d <= 31 and 1 <= m <= 12:
+                date_tabs.append({'name': t, 'day': d, 'month': m, 'ws': ws})
+
+    date_tabs.sort(key=lambda x: (x['month'], x['day']))
+    if len(date_tabs) < 2:
+        return None, None
+
+    COL_R_REL = 15  # Column R relative to column C (index 2)
+    labels = None
+    periods = []
+
+    for tab in date_tabs:
+        raw = tab['ws'].get_all_values()
+        start = 3
+        for i, row in enumerate(raw):
+            if len(row) > 1 and 'Main KPIs' in row[1]:
+                start = i
+                break
+        rows = raw[start:]
+        t_labels, t_vals = [], []
+        for row in rows:
+            lbl = row[1] if len(row) > 1 else ''
+            vals = row[2:] if len(row) > 2 else []
+            vs = vals[COL_R_REL] if COL_R_REL < len(vals) else ''
+            try:
+                v = float(vs.replace(',', '').replace(' ', '')) if vs.strip() else 0
+            except Exception:
+                v = 0
+            t_labels.append(lbl)
+            t_vals.append(v)
+        if labels is None:
+            labels = t_labels
+        periods.append({
+            'name': tab['name'],
+            'label': f"{tab['day']:02d}/{tab['month']:02d}",
+            'values': t_vals,
+        })
+
+    n = len(labels)
+
+    # Absolute values DataFrame
+    abs_df = pd.DataFrame({'KPI': labels})
+    for p in periods:
+        v = p['values'] + [0] * max(0, n - len(p['values']))
+        abs_df[p['label']] = v[:n]
+
+    # Variation % DataFrame
+    var_df = pd.DataFrame({'KPI': labels})
+    for i in range(1, len(periods)):
+        prev, curr = periods[i - 1]['values'], periods[i]['values']
+        col = f"{periods[i - 1]['label']} → {periods[i]['label']}"
+        var = []
+        for j in range(n):
+            vp = prev[j] if j < len(prev) else 0
+            vc_ = curr[j] if j < len(curr) else 0
+            if vp == 0:
+                var.append(None if vc_ != 0 else 0.0)
+            else:
+                var.append(((vc_ - vp) / vp) * 100)
+        var_df[col] = var
+
+    # Accumulated (first vs last)
+    fv, lv = periods[0]['values'], periods[-1]['values']
+    acum = []
+    for j in range(n):
+        vf = fv[j] if j < len(fv) else 0
+        vl = lv[j] if j < len(lv) else 0
+        if vf == 0:
+            acum.append(None if vl != 0 else 0.0)
+        else:
+            acum.append(((vl - vf) / vf) * 100)
+    var_df['Acumulado'] = acum
+
+    # Average per period
+    np_ = len(periods) - 1
+    var_df['Média'] = [a / np_ if a is not None else None for a in acum]
+
+    return abs_df, var_df
 
 
 # ═══════════════════════════════════════════════════════════════════════════════
@@ -633,9 +725,9 @@ def page_recon(fdf, raw_summary):
 
     st.markdown("---")
 
-    # ── Sub-tabs: Todos | Actives | Inactives | Incorrect Sort Codes | Isn't in DB ──
-    sub_all, sub_active, sub_inactive, sub_sc, sub_nodb = st.tabs(
-        ["Todos", "Actives", "Inactives", "Incorrect Sort Codes", "Isn't in DB"])
+    # ── Sub-tabs: Todos | Incorrect Sort Codes | Wrong Staff ID | Isn't in DB ──
+    sub_all, sub_sc, sub_wsid, sub_nodb = st.tabs(
+        ["Todos", "Incorrect Sort Codes", "Wrong Staff ID", "Isn't in DB"])
 
     def render_recon_table(sub_df, key_suffix):
         st.caption(f"{len(sub_df):,} registros")
@@ -656,12 +748,10 @@ def page_recon(fdf, raw_summary):
 
     with sub_all:
         render_recon_table(fdf, "todos")
-    with sub_active:
-        render_recon_table(fdf[fdf['active']], "actives")
-    with sub_inactive:
-        render_recon_table(fdf[~fdf['active']], "inactives")
     with sub_sc:
         render_recon_table(fdf[fdf['all_dbs'] & ~fdf['loc_eq_total']], "incorrect_sc")
+    with sub_wsid:
+        render_recon_table(fdf[fdf['active'] & ~fdf['all_dbs'] & fdf['name_on_all']], "wrong_sid")
     with sub_nodb:
         render_recon_table(fdf[~fdf['all_dbs']], "not_in_db")
 
@@ -829,6 +919,177 @@ def page_consulta(df):
 
 
 # ═══════════════════════════════════════════════════════════════════════════════
+#  PAGE: HC GROWTH
+# ═══════════════════════════════════════════════════════════════════════════════
+def page_hc_growth(abs_df, var_df):
+    st.markdown("#### 📈 HC Growth - Evolução por Período")
+
+    if abs_df is None or var_df is None:
+        st.warning("Dados de HC Growth não disponíveis. Verifique se a planilha possui "
+                    "pelo menos 2 abas no formato DDMM.")
+        return
+
+    kpis = abs_df['KPI'].tolist()
+    period_cols = [c for c in abs_df.columns if c != 'KPI']
+    var_period_cols = [c for c in var_df.columns if c not in ('KPI', 'Acumulado', 'Média')]
+    last_var = var_period_cols[-1] if var_period_cols else None
+
+    # ── KPI Cards ──
+    card_defs = []
+    for i, k in enumerate(kpis):
+        s = k.strip()
+        if s == '# of HCs':
+            card_defs.append((i, 'Total HCs', NAVY))
+        elif k == '   Active':
+            card_defs.append((i, 'Ativos', CYAN))
+        elif k == '   Inactive':
+            card_defs.append((i, 'Inativos', RED))
+
+    # Find Active FTEs and BPOs (appear after '   Active' at indent level ~1)
+    active_found = False
+    fte_done = False
+    for i, k in enumerate(kpis):
+        if k == '   Active':
+            active_found = True
+        elif active_found and not fte_done and k.strip() == 'FTEs' and indent_level(k) <= 2:
+            card_defs.append((i, 'FTEs Ativos', BLUE))
+            fte_done = True
+        elif fte_done and k.strip() == 'BPOs' and indent_level(k) <= 2:
+            card_defs.append((i, 'BPOs Ativos', ORANGE))
+            break
+
+    if card_defs and last_var:
+        cols = st.columns(min(len(card_defs), 6))
+        for col, (idx, name, color) in zip(cols, card_defs[:6]):
+            val = abs_df.loc[idx, period_cols[-1]] if idx < len(abs_df) else 0
+            var_val = var_df.loc[idx, last_var] if idx < len(var_df) else None
+            if pd.isna(var_val):
+                var_val = None
+            var_str = f"{var_val:+.1f}%" if var_val is not None else "N/A"
+            arrow = "↑" if var_val and var_val > 0 else ("↓" if var_val and var_val < 0 else "→")
+            col.markdown(
+                f'<div class="kpi" style="background:{color}">'
+                f'<h4>{name}</h4><h2>{fmt(val)}</h2>'
+                f'<span style="font-size:11px;opacity:.85">{arrow} {var_str}</span>'
+                f'</div>', unsafe_allow_html=True)
+
+    st.markdown("")
+
+    # ── Evolution Chart ──
+    st.markdown("##### Evolução - Valores Absolutos")
+
+    # Build unique options for multiselect
+    options = []
+    opt_to_idx = {}
+    seen = {}
+    for i, k in enumerate(kpis):
+        s = k.strip()
+        if not s:
+            continue
+        if s in seen:
+            seen[s] += 1
+            disp = f"{s} [{seen[s]}]"
+        else:
+            seen[s] = 1
+            disp = s
+        options.append(disp)
+        opt_to_idx[disp] = i
+
+    defaults = [o for o in options if o in ('# of HCs', 'Active', 'Inactive')][:3]
+    selected = st.multiselect("KPIs:", options, default=defaults, key="hcg_sel")
+
+    if selected:
+        fig = go.Figure()
+        chart_colors = [NAVY, CYAN, RED, BLUE, ORANGE, YELLOW, GOLD, LBLUE, GRAY]
+        for si, sel in enumerate(selected):
+            idx = opt_to_idx[sel]
+            values = [abs_df.loc[idx, c] for c in period_cols]
+            fig.add_trace(go.Scatter(
+                x=period_cols, y=values,
+                mode='lines+markers+text', name=sel,
+                line=dict(color=chart_colors[si % len(chart_colors)], width=2),
+                text=[fmt(v) for v in values],
+                textposition='top center', textfont=dict(size=10)))
+        fig.update_layout(
+            height=350, margin=dict(l=10, r=10, t=40, b=30),
+            font=dict(size=11), xaxis_title="Período", yaxis_title="",
+            legend=dict(orientation="h", y=1.15, x=0.5, xanchor="center"))
+        st.plotly_chart(fig, use_container_width=True)
+
+    st.markdown("---")
+
+    # ── Variation % Table ──
+    st.markdown("##### Variação % por Período")
+    all_v_cols = var_period_cols + ['Acumulado', 'Média']
+
+    h = ('<div style="overflow-x:auto;max-height:600px;overflow-y:auto;'
+         'border-radius:8px;border:1px solid #e0e4e8;">'
+         '<table class="rtable"><tr>'
+         '<th style="text-align:left;min-width:280px">KPI</th>')
+    for vc in all_v_cols:
+        cls = 'gh' if vc in ('Acumulado', 'Média') else ''
+        h += f'<th class="{cls}">{vc}</th>'
+    h += '</tr>'
+
+    for i, kpi in enumerate(kpis):
+        if not kpi.strip():
+            h += '<tr class="sep"><td colspan="100"></td></tr>'
+            continue
+        lvl = indent_level(kpi)
+        lbl = f'<span style="padding-left:{lvl*16}px">{kpi.strip()}</span>'
+        h += f'<tr class="lv{min(lvl, 4)}"><td>{lbl}</td>'
+        for vc in all_v_cols:
+            if vc not in var_df.columns or i >= len(var_df):
+                h += '<td>-</td>'
+                continue
+            val = var_df.loc[i, vc]
+            if pd.isna(val):
+                h += f'<td style="color:{GOLD};font-style:italic">Novo</td>'
+            elif val == 0:
+                h += f'<td style="color:{GRAY}">0.0%</td>'
+            elif val > 0:
+                h += f'<td style="color:{RED};font-weight:600">+{val:.1f}%</td>'
+            else:
+                h += f'<td style="color:{CYAN};font-weight:600">{val:.1f}%</td>'
+        h += '</tr>'
+    h += '</table></div>'
+    st.markdown(h, unsafe_allow_html=True)
+
+    st.markdown("---")
+
+    # ── Absolute Values Table ──
+    with st.expander("📊 Valores Absolutos por Período"):
+        h2 = ('<div style="overflow-x:auto;max-height:600px;overflow-y:auto;'
+              'border-radius:8px;border:1px solid #e0e4e8;">'
+              '<table class="rtable"><tr>'
+              '<th style="text-align:left;min-width:280px">KPI</th>')
+        for pc in period_cols:
+            h2 += f'<th>{pc}</th>'
+        h2 += '</tr>'
+        for i, kpi in enumerate(kpis):
+            if not kpi.strip():
+                h2 += '<tr class="sep"><td colspan="100"></td></tr>'
+                continue
+            lvl = indent_level(kpi)
+            lbl = f'<span style="padding-left:{lvl*16}px">{kpi.strip()}</span>'
+            h2 += f'<tr class="lv{min(lvl, 4)}"><td>{lbl}</td>'
+            for pc in period_cols:
+                v = abs_df.loc[i, pc] if i < len(abs_df) else 0
+                cls = f'style="color:{GRAY}"' if v == 0 else ''
+                h2 += f'<td {cls}>{fmt(v)}</td>'
+            h2 += '</tr>'
+        h2 += '</table></div>'
+        st.markdown(h2, unsafe_allow_html=True)
+
+    # ── Export ──
+    st.markdown("---")
+    st.markdown("**Exportar Variação %:**")
+    render_export_buttons(var_df, "hcg_var")
+    st.markdown("**Exportar Valores Absolutos:**")
+    render_export_buttons(abs_df, "hcg_abs")
+
+
+# ═══════════════════════════════════════════════════════════════════════════════
 #  PAGE: GUIA DE USO
 # ═══════════════════════════════════════════════════════════════════════════════
 def page_guia():
@@ -865,8 +1126,10 @@ Este dashboard consolida dados de **3 abas** da planilha de Reconciliation:
     st.markdown("""
 - **📊 Gráficos** — KPIs principais (Total, Active, Inactive, FTE, BPO, por database)
   e gráficos interativos (HC por Database, HC por Site Type, FTE vs BPO, Divergências, Sort Code).
-- **📋 Recon** — Tabela resumo tipo report, sub-abas (Todos, Actives, Inactives,
-  Incorrect Sort Codes, Isn't in DB), tabela original Ind. Summary com drill-down.
+- **📋 Recon** — Tabela resumo tipo report, sub-abas (Todos, Incorrect Sort Codes,
+  Wrong Staff ID, Isn't in DB), tabela original Ind. Summary com drill-down.
+- **📈 HC Growth** — Evolução de KPIs ao longo dos períodos (abas DDMM da planilha
+  de acompanhamento). Gráfico de linha, tabela de variação % e valores absolutos.
 - **🔍 Consulta Colaborador(a)** — Busca individual por Staff ID, Nome ou CPF/CNPJ.
   Exibe card detalhado com dados de cada base (HR, Attendance, Performance).
 - **📖 Guia de Uso** — Esta página.
@@ -930,6 +1193,7 @@ def main():
     df_cc = load_crosscheck()
     df_hr = load_hr()
     raw_summary = load_ind_summary()
+    abs_growth, var_growth = load_hc_growth()
 
     if df_cc.empty:
         st.error("Erro ao carregar CrossCheck.")
@@ -1012,15 +1276,18 @@ def main():
     st.caption(f"CrossCheck: {len(fdf):,} registros (de {len(df):,} total)")
 
     # ── Main Navigation (pill tabs) ──
-    tab_graficos, tab_recon, tab_consulta, tab_guia, tab_glossario = st.tabs([
-        "📊 Gráficos", "📋 Recon", "🔍 Consulta Colaborador(a)",
-        "📖 Guia de Uso", "📚 Glossário"])
+    tab_graficos, tab_recon, tab_growth, tab_consulta, tab_guia, tab_glossario = st.tabs([
+        "📊 Gráficos", "📋 Recon", "📈 HC Growth",
+        "🔍 Consulta Colaborador(a)", "📖 Guia de Uso", "📚 Glossário"])
 
     with tab_graficos:
         page_graficos(fdf)
 
     with tab_recon:
         page_recon(fdf, raw_summary)
+
+    with tab_growth:
+        page_hc_growth(abs_growth, var_growth)
 
     with tab_consulta:
         page_consulta(df)
@@ -1032,7 +1299,7 @@ def main():
         page_glossario()
 
     st.markdown("")
-    st.caption("v4.1 · Dados cached 5 min · Fonte: CrossCheck + Ind.Summary + HR")
+    st.caption("v4.2 · Dados cached 5 min · Fonte: CrossCheck + Ind.Summary + HR + HC Growth")
 
 
 if __name__ == '__main__':
