@@ -249,8 +249,11 @@ def load_ind_summary():
 @st.cache_data(ttl=300, show_spinner="Carregando HC Growth...")
 def load_hc_growth():
     """Load DDMM date tabs from HC Growth spreadsheet and compute comparisons."""
-    gc = get_gc()
-    sp = gc.open_by_key(GROWTH_SID)
+    try:
+        gc = get_gc()
+        sp = gc.open_by_key(GROWTH_SID)
+    except Exception:
+        return None, None
 
     date_tabs = []
     for ws in sp.worksheets():
