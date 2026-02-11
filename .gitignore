@@ -1,0 +1,15 @@
+# Secrets (NUNCA commitar)
+.streamlit/secrets.toml
+*.pickle
+*.json
+!requirements.txt
+
+# Python
+__pycache__/
+*.pyc
+.venv/
+venv/
+
+# IDE
+.vscode/
+.idea/
