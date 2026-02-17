@@ -742,19 +742,20 @@ def page_recon(fdf, raw_summary):
             result[op] = int(condition_fn(grp)) if len(grp) > 0 else 0
         return result
 
+    # Performance perspective (Perf column from Ind.Summary)
     report_data = [
         ("Não contém nas bases - FTE",
-         count_by_op(active_ftes, lambda g: (~g['all_dbs']).sum(), ops_report)),
+         count_by_op(active_ftes, lambda g: (~g['in_perf']).sum(), ops_report)),
         ("OK - FTE (Sort Code correto)",
-         count_by_op(active_ftes[active_ftes['all_dbs']], lambda g: g['loc_eq_total'].sum(), ops_report)),
+         count_by_op(active_ftes[active_ftes['all_dbs']], lambda g: g['loc_eq_perf'].sum(), ops_report)),
         ("Location divergente - FTE",
-         count_by_op(active_ftes[active_ftes['all_dbs']], lambda g: (~g['loc_eq_total']).sum(), ops_report)),
+         count_by_op(active_ftes[active_ftes['all_dbs']], lambda g: (~g['loc_eq_perf']).sum(), ops_report)),
         ("Não contém nas bases - BPO",
-         count_by_op(active_bpos, lambda g: (~g['all_dbs']).sum(), ops_report)),
+         count_by_op(active_bpos, lambda g: (~g['in_perf']).sum(), ops_report)),
         ("OK - BPO (Sort Code correto)",
-         count_by_op(active_bpos[active_bpos['all_dbs']], lambda g: g['loc_eq_total'].sum(), ops_report)),
+         count_by_op(active_bpos[active_bpos['all_dbs']], lambda g: g['loc_eq_perf'].sum(), ops_report)),
         ("Location divergente - BPO",
-         count_by_op(active_bpos[active_bpos['all_dbs']], lambda g: (~g['loc_eq_total']).sum(), ops_report)),
+         count_by_op(active_bpos[active_bpos['all_dbs']], lambda g: (~g['loc_eq_perf']).sum(), ops_report)),
     ]
 
     h = ('<div style="overflow-x:auto;border-radius:8px;border:1px solid #e0e4e8;">'
