@@ -779,47 +779,90 @@ def page_recon(fdf, raw_summary):
     sub_all, sub_sc, sub_wsid, sub_nodb = st.tabs(
         ["Todos", "Incorrect Sort Codes", "Wrong Staff ID", "Isn't in DB"])
 
-    def render_recon_table(sub_df, key_suffix):
-        st.caption(f"{len(sub_df):,} registros")
-        qs1, qs2, qs3, qs4 = st.columns(4)
-        with qs1:
-            st.metric("Isn't in all DBs", fmt(int((~sub_df['all_dbs']).sum())))
-        with qs2:
-            adb = sub_df[sub_df['all_dbs']]
-            st.metric("Sort Code Incorreto", fmt(int((~adb['loc_eq_total']).sum()) if len(adb) > 0 else 0))
-        with qs3:
-            st.metric("Cargo Incorreto", fmt(int((~adb['func_eq_total']).sum()) if len(adb) > 0 else 0))
-        with qs4:
-            st.metric("Nome Incorreto", fmt(int((~adb['name_eq_total']).sum()) if len(adb) > 0 else 0))
+    def render_op_pills(sub_df):
+        """Operation breakdown pills."""
+        if len(sub_df) == 0:
+            return
+        op_tags = ['FMH', 'HUB', 'HUB (Total)', 'SOC', 'Almox', 'CB', 'RTS']
+        op_html = '<div style="display:flex;gap:6px;flex-wrap:wrap;margin:8px 0;">'
+        for op in op_tags:
+            if op == 'HUB (Total)':
+                c = len(sub_df[sub_df['loc_type'].isin(['FMH', 'HUB'])])
+            else:
+                c = len(sub_df[sub_df['loc_type'] == op])
+            bg = ORANGE if c > 0 else LGRAY
+            op_html += (f'<span style="background:{bg};color:white;padding:4px 12px;'
+                        f'border-radius:12px;font-size:11px;font-weight:600;">'
+                        f'{op}: {c:,}</span>')
+        op_html += '</div>'
+        st.markdown(op_html, unsafe_allow_html=True)
 
-        # Breakdown by operation
-        if len(sub_df) > 0:
-            op_tags = ['FMH', 'HUB', 'HUB (Total)', 'SOC', 'Almox', 'CB', 'RTS']
-            op_html = '<div style="display:flex;gap:6px;flex-wrap:wrap;margin:8px 0;">'
-            for op in op_tags:
-                if op == 'HUB (Total)':
-                    c = len(sub_df[sub_df['loc_type'].isin(['FMH', 'HUB'])])
-                else:
-                    c = len(sub_df[sub_df['loc_type'] == op])
-                bg = ORANGE if c > 0 else LGRAY
-                op_html += (f'<span style="background:{bg};color:white;padding:4px 12px;'
-                            f'border-radius:12px;font-size:11px;font-weight:600;">'
-                            f'{op}: {c:,}</span>')
-            op_html += '</div>'
-            st.markdown(op_html, unsafe_allow_html=True)
-
+    def render_table_and_export(sub_df, key_suffix):
         display_df = build_display_df(sub_df)
         st.dataframe(display_df, use_container_width=True, height=450, hide_index=True)
         render_export_buttons(display_df, key_suffix)
 
+    # ── Todos ──
     with sub_all:
-        render_recon_table(fdf, "todos")
+        st.caption(f"{len(fdf):,} registros")
+        qs1, qs2, qs3, qs4 = st.columns(4)
+        with qs1:
+            st.metric("Isn't in all DBs", fmt(int((~fdf['all_dbs']).sum())))
+        with qs2:
+            adb = fdf[fdf['all_dbs']]
+            st.metric("Sort Code Incorreto", fmt(int((~adb['loc_eq_perf']).sum()) if len(adb) > 0 else 0))
+        with qs3:
+            st.metric("Cargo Incorreto", fmt(int((~adb['func_eq_total']).sum()) if len(adb) > 0 else 0))
+        with qs4:
+            st.metric("Nome Incorreto", fmt(int((~adb['name_eq_total']).sum()) if len(adb) > 0 else 0))
+        render_op_pills(fdf)
+        render_table_and_export(fdf, "todos")
+
+    # ── Incorrect Sort Codes ──
     with sub_sc:
-        render_recon_table(fdf[fdf['all_dbs'] & ~fdf['loc_eq_total']], "incorrect_sc")
+        sc_df = fdf[fdf['all_dbs'] & ~fdf['loc_eq_perf']]
+        st.caption(f"{len(sc_df):,} registros")
+        qs1, qs2, qs3 = st.columns(3)
+        with qs1:
+            st.metric("SC ≠ SoT (HR)", fmt(int((~sc_df['loc_eq_hr']).sum())))
+        with qs2:
+            st.metric("SC ≠ SoT (Att)", fmt(int((~sc_df['loc_eq_att']).sum())))
+        with qs3:
+            st.metric("SC ≠ SoT (Perf)", fmt(int((~sc_df['loc_eq_perf']).sum())))
+        render_op_pills(sc_df)
+        render_table_and_export(sc_df, "incorrect_sc")
+
+    # ── Wrong Staff ID ──
     with sub_wsid:
-        render_recon_table(fdf[fdf['active'] & ~fdf['all_dbs'] & fdf['name_on_all']], "wrong_sid")
+        wsid_df = fdf[fdf['active'] & ~fdf['all_dbs'] & fdf['name_on_all']]
+        st.caption(f"{len(wsid_df):,} registros")
+        qs1, qs2, qs3, qs4 = st.columns(4)
+        with qs1:
+            st.metric("FTEs", fmt(int(wsid_df['spx'].sum())))
+        with qs2:
+            st.metric("BPOs", fmt(int(wsid_df['bpo'].sum())))
+        with qs3:
+            st.metric("Não está no Att", fmt(int((~wsid_df['in_att']).sum())))
+        with qs4:
+            st.metric("Não está no Perf", fmt(int((~wsid_df['in_perf']).sum())))
+        render_op_pills(wsid_df)
+        render_table_and_export(wsid_df, "wrong_sid")
+
+    # ── Isn't in DB ──
     with sub_nodb:
-        render_recon_table(fdf[~fdf['all_dbs']], "not_in_db")
+        nodb_df = fdf[~fdf['all_dbs']]
+        st.caption(f"{len(nodb_df):,} registros")
+        qs1, qs2, qs3, qs4 = st.columns(4)
+        with qs1:
+            st.metric("FTEs", fmt(int(nodb_df['spx'].sum())))
+        with qs2:
+            st.metric("Não está no HR", fmt(int((~nodb_df['in_hr']).sum())))
+        with qs3:
+            st.metric("Não está no Att", fmt(int((~nodb_df['in_att']).sum())))
+        with qs4:
+            st.metric("Não está no Perf", fmt(int((~nodb_df['in_perf']).sum())))
+        render_op_pills(nodb_df)
+        render_table_and_export(nodb_df, "not_in_db")
 
     # ── Tabela Original Ind. Summary + Drill-Down ──
     st.markdown("---")
