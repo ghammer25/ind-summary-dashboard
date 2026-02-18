@@ -175,6 +175,7 @@ def get_gc():
 # ═══════════════════════════════════════════════════════════════════════════════
 SID = "1f3RtvA7F2SCdJ5XJkhXh0W8JOb6qnuyDj1zzhB1BanY"
 GROWTH_SID = "1fMgeB-AMfq0_mGzwLjAK-dEBoECUJNeAEhdJSJ1cwM0"
+TICKETS_SID = "1WvB4TEEFslSES4glultsM-C4BTBE7OaPs0hjOc0Sryg"
 
 
 @st.cache_data(ttl=300, show_spinner="Carregando CrossCheck...")
@@ -379,6 +380,56 @@ def load_hc_growth():
         perf_data[(grp, sc)] = pdf
 
     return abs_df, var_df, perf_data
+
+
+@st.cache_data(ttl=300, show_spinner="Carregando Tickets...")
+def load_tickets():
+    """Load Jira Desligamento tickets from the Tickets spreadsheet."""
+    try:
+        gc = get_gc()
+        sp = gc.open_by_key(TICKETS_SID)
+        ws = sp.worksheet("Desligamento")
+        raw = ws.get_all_values()
+    except Exception:
+        return pd.DataFrame()
+
+    if len(raw) < 2:
+        return pd.DataFrame()
+
+    # Header row 0, data from row 1+
+    # Col A(0)=Chave, B(1)=Criado, C(2)=Tipo op, D(3), E(4), F(5),
+    # G(6)=Staff ID, H(7)=Nome, I(8)=Consultorias, J(9)=Motivo, K(10)=Tipo Item
+    rows = []
+    for row in raw[1:]:
+        if len(row) > 10 and any(cell.strip() for cell in row[:11]):
+            rows.append({
+                'chave': str(row[0]).strip(),
+                'criado': str(row[1]).strip(),
+                'tipo_op': str(row[2]).strip(),
+                'staff_id': str(row[6]).strip(),
+                'nome': str(row[7]).strip(),
+                'consultorias': str(row[8]).strip(),
+                'motivo': str(row[9]).strip(),
+                'tipo_item': str(row[10]).strip(),
+            })
+
+    if not rows:
+        return pd.DataFrame()
+
+    df = pd.DataFrame(rows)
+    df = df[df['chave'].ne('') & df['chave'].ne('-')].copy()
+
+    # Parse date
+    def parse_date(s):
+        for fmt_str in ('%d/%m/%Y %H:%M', '%d/%m/%Y', '%Y-%m-%d'):
+            try:
+                return datetime.strptime(s, fmt_str)
+            except Exception:
+                continue
+        return None
+
+    df['data_criacao'] = df['criado'].apply(parse_date)
+    return df
 
 
 # ═══════════════════════════════════════════════════════════════════════════════
@@ -1412,6 +1463,164 @@ def page_performance(perf_data):
 
 
 # ═══════════════════════════════════════════════════════════════════════════════
+#  PAGE: TICKETS (JIRA DESLIGAMENTO)
+# ═══════════════════════════════════════════════════════════════════════════════
+def page_tickets(df_tickets):
+    st.markdown("#### 🎫 Tickets — Jira Desligamento")
+
+    if df_tickets is None or df_tickets.empty:
+        st.warning("Dados de Tickets não disponíveis. Verifique se a planilha possui a aba 'Desligamento'.")
+        return
+
+    total = len(df_tickets)
+
+    # ── KPI Cards ──
+    n_tipo_item = df_tickets['tipo_item'].nunique()
+    n_motivos = df_tickets['motivo'].nunique()
+    n_consultorias = df_tickets['consultorias'].nunique()
+    n_tipos_op = df_tickets['tipo_op'].nunique()
+
+    r1 = st.columns(5)
+    for col, (title, val, color) in zip(r1, [
+        ("Total Tickets", total, NAVY),
+        ("Tipos de Item", n_tipo_item, BLUE),
+        ("Motivos", n_motivos, ORANGE),
+        ("Consultorias", n_consultorias, CYAN),
+        ("Tipos Operação", n_tipos_op, GOLD),
+    ]):
+        col.markdown(
+            f'<div class="kpi" style="background:{color}">'
+            f'<h4>{title}</h4><h2>{fmt(val)}</h2></div>',
+            unsafe_allow_html=True)
+
+    st.markdown("")
+
+    # ── Filters row ──
+    fc1, fc2, fc3 = st.columns(3)
+    with fc1:
+        tipos_item = sorted([t for t in df_tickets['tipo_item'].unique() if t.strip()])
+        sel_tipo_item = st.multiselect("Tipo Item", tipos_item, default=[], placeholder="Todos",
+                                        key="tk_tipo_item")
+    with fc2:
+        motivos = sorted([m for m in df_tickets['motivo'].unique() if m.strip()])
+        sel_motivo = st.multiselect("Motivo", motivos, default=[], placeholder="Todos",
+                                     key="tk_motivo")
+    with fc3:
+        consultorias = sorted([c for c in df_tickets['consultorias'].unique() if c.strip()])
+        sel_consultoria = st.multiselect("Consultoria", consultorias, default=[], placeholder="Todas",
+                                          key="tk_consultoria")
+
+    mask = pd.Series(True, index=df_tickets.index)
+    if sel_tipo_item:
+        mask &= df_tickets['tipo_item'].isin(sel_tipo_item)
+    if sel_motivo:
+        mask &= df_tickets['motivo'].isin(sel_motivo)
+    if sel_consultoria:
+        mask &= df_tickets['consultorias'].isin(sel_consultoria)
+    fdf = df_tickets[mask].copy()
+
+    st.caption(f"Exibindo {len(fdf):,} de {total:,} tickets")
+    st.markdown("---")
+
+    # ── Charts ──
+    ch1, ch2 = st.columns(2)
+
+    with ch1:
+        st.markdown("##### Por Tipo de Item")
+        tipo_counts = fdf['tipo_item'].value_counts().reset_index()
+        tipo_counts.columns = ['Tipo Item', 'Qtd']
+        if not tipo_counts.empty:
+            fig1 = px.bar(tipo_counts, x='Qtd', y='Tipo Item', orientation='h',
+                          color_discrete_sequence=[NAVY])
+            fig1.update_layout(height=max(250, len(tipo_counts) * 32),
+                               margin=dict(l=10, r=10, t=10, b=10),
+                               font=dict(size=11), yaxis={'categoryorder': 'total ascending'})
+            st.plotly_chart(fig1, use_container_width=True, key="tk_chart_tipo")
+        else:
+            st.info("Sem dados.")
+
+    with ch2:
+        st.markdown("##### Por Motivo")
+        motivo_counts = fdf['motivo'].value_counts().reset_index()
+        motivo_counts.columns = ['Motivo', 'Qtd']
+        if not motivo_counts.empty:
+            fig2 = px.bar(motivo_counts, x='Qtd', y='Motivo', orientation='h',
+                          color_discrete_sequence=[ORANGE])
+            fig2.update_layout(height=max(250, len(motivo_counts) * 32),
+                               margin=dict(l=10, r=10, t=10, b=10),
+                               font=dict(size=11), yaxis={'categoryorder': 'total ascending'})
+            st.plotly_chart(fig2, use_container_width=True, key="tk_chart_motivo")
+        else:
+            st.info("Sem dados.")
+
+    ch3, ch4 = st.columns(2)
+
+    with ch3:
+        st.markdown("##### Por Tipo de Operação")
+        op_counts = fdf['tipo_op'].value_counts().reset_index()
+        op_counts.columns = ['Tipo Operação', 'Qtd']
+        if not op_counts.empty:
+            fig3 = px.pie(op_counts, names='Tipo Operação', values='Qtd',
+                          color_discrete_sequence=[NAVY, BLUE, CYAN, ORANGE, GOLD, RED, GRAY])
+            fig3.update_layout(height=300, margin=dict(l=10, r=10, t=10, b=10),
+                               font=dict(size=11))
+            st.plotly_chart(fig3, use_container_width=True, key="tk_chart_op")
+        else:
+            st.info("Sem dados.")
+
+    with ch4:
+        st.markdown("##### Por Consultoria")
+        cons_counts = fdf['consultorias'].value_counts().reset_index()
+        cons_counts.columns = ['Consultoria', 'Qtd']
+        if not cons_counts.empty:
+            fig4 = px.pie(cons_counts, names='Consultoria', values='Qtd',
+                          color_discrete_sequence=[CYAN, BLUE, ORANGE, NAVY, GOLD, RED, GRAY])
+            fig4.update_layout(height=300, margin=dict(l=10, r=10, t=10, b=10),
+                               font=dict(size=11))
+            st.plotly_chart(fig4, use_container_width=True, key="tk_chart_cons")
+        else:
+            st.info("Sem dados.")
+
+    # ── Timeline (tickets over time) ──
+    df_with_date = fdf[fdf['data_criacao'].notna()].copy()
+    if not df_with_date.empty:
+        st.markdown("---")
+        st.markdown("##### Evolução Temporal")
+        df_with_date['mes'] = df_with_date['data_criacao'].dt.to_period('M').astype(str)
+        timeline = df_with_date.groupby('mes').size().reset_index(name='Qtd')
+        timeline.columns = ['Período', 'Qtd']
+        fig5 = go.Figure()
+        fig5.add_trace(go.Scatter(
+            x=timeline['Período'], y=timeline['Qtd'],
+            mode='lines+markers+text', name='Tickets',
+            line=dict(color=NAVY, width=2),
+            text=timeline['Qtd'].astype(str),
+            textposition='top center', textfont=dict(size=9)))
+        fig5.update_layout(height=300, margin=dict(l=10, r=10, t=30, b=30),
+                           font=dict(size=11), xaxis_title="Período", yaxis_title="Tickets")
+        st.plotly_chart(fig5, use_container_width=True, key="tk_timeline")
+
+    # ── Data Table ──
+    st.markdown("---")
+    st.markdown("##### Tabela de Tickets")
+
+    display_cols = ['chave', 'criado', 'tipo_op', 'staff_id', 'nome',
+                    'consultorias', 'motivo', 'tipo_item']
+    col_rename = {
+        'chave': 'Chave', 'criado': 'Criado', 'tipo_op': 'Tipo Op',
+        'staff_id': 'Staff ID', 'nome': 'Nome', 'consultorias': 'Consultoria',
+        'motivo': 'Motivo', 'tipo_item': 'Tipo Item',
+    }
+    display_df = fdf[display_cols].rename(columns=col_rename)
+    st.dataframe(display_df, use_container_width=True, height=400)
+
+    # ── Export ──
+    st.markdown("---")
+    st.markdown("**Exportar Tickets:**")
+    render_export_buttons(display_df, "tickets")
+
+
+# ═══════════════════════════════════════════════════════════════════════════════
 #  PAGE: GUIA DE USO
 # ═══════════════════════════════════════════════════════════════════════════════
 def page_guia():
@@ -1427,6 +1636,7 @@ Este dashboard consolida dados de **3 abas** da planilha de Reconciliation:
 | **CrossCheck** | `358464056` | Tabela principal de reconciliação. Cruza dados de HR, Attendance e Performance para cada colaborador (staff\_id). Contém ~40K linhas com flags booleanas (in\_hr, in\_att, in\_perf, etc.), nomes, cargos, sort codes e CNPJs de cada base. |
 | **HR** | `0` | Base de dados de Recursos Humanos. Fornece dados complementares: nome do BPO, Categoria HC, Tipo de Contrato e Status HR. Usada para enriquecer filtros da sidebar. |
 | **Ind. Summary** | `2047376970` | Tabela resumo por operação (FMH, SOC, HUB, Almox, CB, RTS) com contagens de HR, Attendance, Performance e Total para cada KPI. Exibida na aba Recon com possibilidade de drill-down. |
+| **Tickets (Jira)** | Aba `Desligamento` | Tickets de desligamento do Jira. Contém chave, data de criação, tipo de operação, Staff ID, nome, consultoria, motivo e tipo de item. |
 """)
 
     st.markdown("##### Como os Dados São Processados")
@@ -1454,6 +1664,8 @@ Este dashboard consolida dados de **3 abas** da planilha de Reconciliation:
   de acompanhamento). Gráfico de linha, tabela de variação % e valores absolutos.
 - **🏢 Performance Hubs** — Breakdown de HRIS, Attendance, Performance e Total
   por operação (FMH, HUB, SOC, etc.). Detalhe completo e evolução temporal para FMH e HUB.
+- **🎫 Tickets** — Tickets Jira de Desligamento. KPIs, gráficos por Tipo de Item,
+  Motivo, Tipo de Operação e Consultoria. Evolução temporal e tabela exportável.
 - **🔍 Consulta Colaborador(a)** — Busca individual por Staff ID, Nome ou CPF/CNPJ.
   Exibe card detalhado com dados de cada base (HR, Attendance, Performance).
 - **📖 Guia de Uso** — Esta página.
@@ -1518,6 +1730,7 @@ def main():
     df_hr = load_hr()
     raw_summary = load_ind_summary()
     abs_growth, var_growth, perf_data = load_hc_growth()
+    df_tickets = load_tickets()
 
     if df_cc.empty:
         st.error("Erro ao carregar CrossCheck.")
@@ -1600,9 +1813,9 @@ def main():
     st.caption(f"CrossCheck: {len(fdf):,} registros (de {len(df):,} total)")
 
     # ── Main Navigation (pill tabs) ──
-    tab_graficos, tab_recon, tab_growth, tab_perf, tab_consulta, tab_guia, tab_glossario = st.tabs([
+    tab_graficos, tab_recon, tab_growth, tab_perf, tab_tickets, tab_consulta, tab_guia, tab_glossario = st.tabs([
         "📊 Gráficos", "📋 Recon", "📈 HC Growth", "🏢 Perf. Hubs",
-        "🔍 Consulta", "📖 Guia", "📚 Glossário"])
+        "🎫 Tickets", "🔍 Consulta", "📖 Guia", "📚 Glossário"])
 
     with tab_graficos:
         page_graficos(fdf)
@@ -1616,6 +1829,9 @@ def main():
     with tab_perf:
         page_performance(perf_data)
 
+    with tab_tickets:
+        page_tickets(df_tickets)
+
     with tab_consulta:
         page_consulta(df)
 
@@ -1626,7 +1842,7 @@ def main():
         page_glossario()
 
     st.markdown("")
-    st.caption("v4.3 · Dados cached 5 min · Fonte: CrossCheck + Ind.Summary + HR + HC Growth")
+    st.caption("v4.4 · Dados cached 5 min · Fonte: CrossCheck + Ind.Summary + HR + HC Growth + Jira")
 
 
 if __name__ == '__main__':
