@@ -446,131 +446,116 @@ def load_tickets():
 
 @st.cache_data(ttl=300, show_spinner="Carregando Presenteísmo...")
 def load_presenteismo():
-    """Load Presenteísmo (attendance) data from Controle-Fevereiro."""
+    """Load Presenteísmo from Controle-Fevereiro.
+    Col F(5) = 'NOME STAFFID' combined key.
+    Cols 15+ = daily dates (01/02/2026..28/02/2026). No overall status column.
+    Returns (lookup_dict, daily_cols, error).
+    """
     try:
         gc = get_gc()
         sp = gc.open_by_key(PRES_SID)
         ws = sp.worksheet("Controle-Fevereiro")
         raw = ws.get_all_values()
     except Exception as e:
-        return pd.DataFrame(), [], str(e)
+        return None, [], str(e)
 
     if len(raw) < 2:
-        return pd.DataFrame(), [], "Aba 'Controle-Fevereiro' está vazia."
+        return None, [], "Aba 'Controle-Fevereiro' está vazia."
 
     header = raw[0]
-    data = raw[1:]
-    df = pd.DataFrame(data, columns=header)
 
-    # Column F (index 5): "Nome StaffID" combined key
-    col_f = df.columns[5] if len(df.columns) > 5 else None
-    # Column R (index 17): overall status
-    col_r = df.columns[17] if len(df.columns) > 17 else None
-
-    if col_f is None:
-        return pd.DataFrame(), [], "Coluna F (chave) não encontrada."
-
-    df['_pres_key'] = df[col_f].astype(str).str.upper().str.strip()
-    df['_pres_status_geral'] = (
-        df[col_r].astype(str).str.strip() if col_r else '')
-
-    # Detect daily columns: find headers containing dates 18/02..28/02
+    # Detect daily columns for dates 18/02..28/02
     target_dates = [f"{d:02d}/02" for d in range(18, 29)]
     daily_cols = []
-    for h in header:
+    daily_idxs = []
+    for i, h in enumerate(header):
         h_s = str(h).strip()
         for td in target_dates:
             if td in h_s:
                 daily_cols.append(h_s)
+                daily_idxs.append(i)
                 break
 
-    return df, daily_cols, None
+    # Build lookup dicts from raw rows (no DataFrame — fast)
+    by_key = {}
+    by_sid = {}
+
+    for row in raw[1:]:
+        if len(row) <= 5:
+            continue
+        full_key = str(row[5]).upper().strip()
+        if not full_key:
+            continue
+
+        daily_vals = {}
+        for col_name, col_idx in zip(daily_cols, daily_idxs):
+            daily_vals[col_name] = str(row[col_idx]).strip() if col_idx < len(row) else ''
+
+        by_key[full_key] = daily_vals
+
+        parts = full_key.rsplit(' ', 1)
+        if len(parts) == 2:
+            by_sid.setdefault(parts[1], []).append((full_key, daily_vals))
+
+    return {'by_key': by_key, 'by_sid': by_sid}, daily_cols, None
 
 
-def crosscheck_tickets_presenteismo(df_tickets, df_pres, daily_cols):
-    """Cross-reference tickets against Presenteísmo using 3-tier matching."""
-    if df_tickets.empty or df_pres.empty:
+def crosscheck_tickets_presenteismo(df_tickets, lookup, daily_cols):
+    """Cross-reference tickets against Presenteísmo.
+    Tier 1: Exact key (NOME STAFFID).
+    Tier 2: Staff ID match (last token). Flags name divergence.
+    """
+    if df_tickets.empty or lookup is None:
         return df_tickets
 
-    # Build lookup structures
-    pres_keys = {}
-    pres_by_sid = {}
-    pres_names = {}
+    by_key = lookup['by_key']
+    by_sid = lookup['by_sid']
 
-    for idx, row in df_pres.iterrows():
-        key = row['_pres_key']
-        if not key:
-            continue
-        pres_keys[key] = idx
-        parts = key.rsplit(' ', 1)
-        if len(parts) == 2:
-            name_part, sid_part = parts
-            pres_by_sid.setdefault(sid_part, []).append((key, idx))
-            pres_names.setdefault(name_part, []).append((key, idx))
-
-    match_status = []
-    status_geral = []
-    daily_values = {col: [] for col in daily_cols}
+    match_col = []
+    daily_data = {col: [] for col in daily_cols}
 
     for _, tk in df_tickets.iterrows():
         nome = str(tk['nome']).upper().strip()
         sid = str(tk['staff_id']).upper().strip()
         ticket_key = f"{nome} {sid}"
 
-        matched_idx = None
+        matched_vals = None
         label = "Não Encontrado"
 
         # Tier 1: Exact key match
-        if ticket_key in pres_keys:
-            matched_idx = pres_keys[ticket_key]
+        if ticket_key in by_key:
+            matched_vals = by_key[ticket_key]
             label = "Encontrado"
 
         # Tier 2: Staff ID match
-        if matched_idx is None and sid:
-            candidates = pres_by_sid.get(sid, [])
+        if matched_vals is None and sid:
+            candidates = by_sid.get(sid, [])
             if len(candidates) == 1:
-                matched_idx = candidates[0][1]
-                label = "Encontrado"
-            elif len(candidates) > 1:
-                best_r, best_i = 0, None
-                for ck, ci in candidates:
-                    cn = ck.rsplit(' ', 1)[0]
-                    r = difflib.SequenceMatcher(None, nome, cn).ratio()
-                    if r > best_r:
-                        best_r, best_i = r, ci
-                if best_i is not None:
-                    matched_idx = best_i
-                    label = "Encontrado"
-
-        # Tier 3: Fuzzy name match
-        if matched_idx is None and nome:
-            best_r, best_k, best_i = 0, None, None
-            for pn, entries in pres_names.items():
-                r = difflib.SequenceMatcher(None, nome, pn).ratio()
-                if r > best_r:
-                    best_r, best_k, best_i = r, entries[0][0], entries[0][1]
-            if best_r >= 0.85 and best_i is not None:
-                matched_idx = best_i
-                pres_sid = best_k.rsplit(' ', 1)[-1] if best_k else ''
-                label = ("Encontrado" if pres_sid == sid
+                pres_name = candidates[0][0].rsplit(' ', 1)[0]
+                matched_vals = candidates[0][1]
+                label = ("Encontrado" if pres_name == nome
                          else "Encontrado (Staff ID Divergente)")
+            elif len(candidates) > 1:
+                best_r, best_vals, best_lbl = 0, None, "Não Encontrado"
+                for pk, pv in candidates:
+                    pn = pk.rsplit(' ', 1)[0]
+                    r = difflib.SequenceMatcher(None, nome, pn).ratio()
+                    if r > best_r:
+                        best_r, best_vals = r, pv
+                        best_lbl = ("Encontrado" if r >= 0.85
+                                    else "Encontrado (Staff ID Divergente)")
+                if best_vals is not None:
+                    matched_vals = best_vals
+                    label = best_lbl
 
-        match_status.append(label)
-        if matched_idx is not None:
-            pr = df_pres.loc[matched_idx]
-            status_geral.append(str(pr['_pres_status_geral']))
-            for col in daily_cols:
-                daily_values[col].append(str(pr.get(col, '')).strip())
-        else:
-            status_geral.append('')
-            for col in daily_cols:
-                daily_values[col].append('')
+        match_col.append(label)
+        for col in daily_cols:
+            daily_data[col].append(matched_vals.get(col, '') if matched_vals else '')
 
     result = df_tickets.copy()
-    result['match_pres'] = match_status
-    result['status_geral_pres'] = status_geral
+    result['match_pres'] = match_col
     for col in daily_cols:
-        result[col] = daily_values[col]
+        result[col] = daily_data[col]
     return result
 
 
@@ -1626,10 +1611,10 @@ def page_tickets(df_tickets, error_msg=None):
                                key="tk_enable_pres")
     if enable_pres:
         try:
-            df_pres, pres_daily_cols, pres_err = load_presenteismo()
-            if df_pres is not None and not df_pres.empty:
+            pres_lookup, pres_daily_cols, pres_err = load_presenteismo()
+            if pres_lookup is not None:
                 df_tickets = crosscheck_tickets_presenteismo(
-                    df_tickets, df_pres, pres_daily_cols or [])
+                    df_tickets, pres_lookup, pres_daily_cols or [])
                 has_pres = True
             elif pres_err:
                 st.warning(f"Presenteísmo não carregado: {pres_err}")
@@ -1804,9 +1789,8 @@ def page_tickets(df_tickets, error_msg=None):
 
     # Add crosscheck columns if available
     if has_pres and 'match_pres' in fdf.columns:
-        display_cols += ['match_pres', 'status_geral_pres']
+        display_cols += ['match_pres']
         col_rename['match_pres'] = 'Match Presenteísmo'
-        col_rename['status_geral_pres'] = 'Status Geral Pres.'
         for dc in (pres_daily_cols or []):
             if dc in fdf.columns:
                 display_cols.append(dc)
