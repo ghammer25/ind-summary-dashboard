@@ -1619,18 +1619,22 @@ def page_tickets(df_tickets, error_msg=None):
             st.warning("Dados de Tickets não disponíveis.")
         return
 
-    # ── Crosscheck with Presenteísmo (loaded on-demand) ──
+    # ── Crosscheck with Presenteísmo (user-triggered) ──
     pres_daily_cols = []
     has_pres = False
-    try:
-        df_pres, pres_daily_cols, pres_err = load_presenteismo()
-        if df_pres is not None and not df_pres.empty:
-            df_tickets = crosscheck_tickets_presenteismo(df_tickets, df_pres, pres_daily_cols or [])
-            has_pres = True
-        elif pres_err:
-            st.warning(f"Presenteísmo não carregado: {pres_err}")
-    except Exception as e:
-        st.warning(f"Erro ao carregar Presenteísmo: {e}")
+    enable_pres = st.checkbox("🔗 Habilitar Crosscheck com Presenteísmo", value=False,
+                               key="tk_enable_pres")
+    if enable_pres:
+        try:
+            df_pres, pres_daily_cols, pres_err = load_presenteismo()
+            if df_pres is not None and not df_pres.empty:
+                df_tickets = crosscheck_tickets_presenteismo(
+                    df_tickets, df_pres, pres_daily_cols or [])
+                has_pres = True
+            elif pres_err:
+                st.warning(f"Presenteísmo não carregado: {pres_err}")
+        except Exception as e:
+            st.warning(f"Erro ao carregar Presenteísmo: {e}")
 
     total = len(df_tickets)
 
