@@ -1623,6 +1623,28 @@ def page_tickets(df_tickets, error_msg=None):
 
     total = len(df_tickets)
 
+    # ── Effectiveness Hero (shown when crosscheck is active) ──
+    if has_pres and 'match_pres' in df_tickets.columns:
+        n_encontrado = int((df_tickets['match_pres'] == 'Encontrado').sum())
+        n_divergente = int((df_tickets['match_pres'] == 'Encontrado (Staff ID Divergente)').sum())
+        n_no_pres = n_encontrado + n_divergente
+        n_nao = int((df_tickets['match_pres'] == 'Não Encontrado').sum())
+        pct_no_pres = (n_no_pres / total * 100) if total else 0
+
+        st.markdown(
+            f'<div style="background:linear-gradient(135deg,{NAVY},{BLUE});border-radius:12px;'
+            f'padding:20px 28px;color:white;margin-bottom:16px;">'
+            f'<div style="font-size:13px;opacity:.8;">Crosscheck: Tickets Jira vs Presenteísmo</div>'
+            f'<div style="font-size:28px;font-weight:700;margin:4px 0;">'
+            f'{fmt(n_no_pres)} pessoas com ticket aberto ainda no Presenteísmo'
+            f'</div>'
+            f'<div style="font-size:14px;opacity:.9;">'
+            f'{pct_no_pres:.1f}% dos {fmt(total)} tickets &nbsp;·&nbsp; '
+            f'{fmt(n_encontrado)} match exato &nbsp;·&nbsp; '
+            f'{fmt(n_divergente)} staff ID divergente &nbsp;·&nbsp; '
+            f'{fmt(n_nao)} não encontrados'
+            f'</div></div>', unsafe_allow_html=True)
+
     # ── KPI Cards ──
     n_tipo_item = df_tickets['tipo_item'].nunique()
     n_motivos = df_tickets['motivo'].nunique()
@@ -1642,15 +1664,11 @@ def page_tickets(df_tickets, error_msg=None):
             f'<h4>{title}</h4><h2>{fmt(val)}</h2></div>',
             unsafe_allow_html=True)
 
-    # ── Crosscheck KPIs ──
+    # ── Crosscheck KPI row ──
     if has_pres and 'match_pres' in df_tickets.columns:
-        n_encontrado = int((df_tickets['match_pres'] == 'Encontrado').sum())
-        n_divergente = int((df_tickets['match_pres'] == 'Encontrado (Staff ID Divergente)').sum())
-        n_nao = int((df_tickets['match_pres'] == 'Não Encontrado').sum())
-        st.markdown("")
         r2 = st.columns(4)
         for col, (title, val, color) in zip(r2, [
-            ("No Presenteísmo", n_encontrado + n_divergente, CYAN),
+            ("No Presenteísmo", n_no_pres, CYAN),
             ("Match Exato", n_encontrado, BLUE),
             ("Staff ID Divergente", n_divergente, YELLOW),
             ("Não Encontrado", n_nao, RED),
@@ -1677,11 +1695,12 @@ def page_tickets(df_tickets, error_msg=None):
         sel_consultoria = st.multiselect("Consultoria", consultorias, default=[], placeholder="Todas",
                                           key="tk_consultoria")
     with fc4:
-        sel_match = []
+        sel_match_raw = []
         if has_pres and 'match_pres' in df_tickets.columns:
             match_opts = sorted(df_tickets['match_pres'].unique())
-            sel_match = st.multiselect("Match Presenteísmo", match_opts,
-                                        default=[], placeholder="Todos", key="tk_match_pres")
+            match_opts_combined = ["Todos no Presenteísmo (Encontrado + Divergente)"] + match_opts
+            sel_match_raw = st.multiselect("Match Presenteísmo", match_opts_combined,
+                                            default=[], placeholder="Todos", key="tk_match_pres")
 
     mask = pd.Series(True, index=df_tickets.index)
     if sel_tipo_item:
@@ -1690,12 +1709,85 @@ def page_tickets(df_tickets, error_msg=None):
         mask &= df_tickets['motivo'].isin(sel_motivo)
     if sel_consultoria:
         mask &= df_tickets['consultorias'].isin(sel_consultoria)
-    if sel_match:
-        mask &= df_tickets['match_pres'].isin(sel_match)
+    if has_pres and sel_match_raw:
+        resolved = set()
+        for s in sel_match_raw:
+            if s == "Todos no Presenteísmo (Encontrado + Divergente)":
+                resolved.add("Encontrado")
+                resolved.add("Encontrado (Staff ID Divergente)")
+            else:
+                resolved.add(s)
+        mask &= df_tickets['match_pres'].isin(resolved)
     fdf = df_tickets[mask].copy()
 
     st.caption(f"Exibindo {len(fdf):,} de {total:,} tickets")
     st.markdown("---")
+
+    # ── Status Distribution Chart (matched tickets only) ──
+    if has_pres and 'match_pres' in fdf.columns and pres_daily_cols:
+        matched = fdf[fdf['match_pres'].isin(['Encontrado', 'Encontrado (Staff ID Divergente)'])]
+        if not matched.empty:
+            st.markdown("##### Status no Presenteísmo — Pessoas com ticket aberto")
+            # Collect all status values across daily columns
+            status_counts = {}
+            for dc in pres_daily_cols:
+                if dc in matched.columns:
+                    for v in matched[dc]:
+                        v = str(v).strip().upper()
+                        if v and v != '' and v != 'NAN':
+                            status_counts[v] = status_counts.get(v, 0) + 1
+
+            if status_counts:
+                sc_df = pd.DataFrame([
+                    {'Status': k, 'Ocorrências': v} for k, v in status_counts.items()
+                ]).sort_values('Ocorrências', ascending=False)
+                total_occ = sc_df['Ocorrências'].sum()
+                sc_df['%'] = (sc_df['Ocorrências'] / total_occ * 100).round(1)
+
+                sc1, sc2 = st.columns(2)
+                with sc1:
+                    fig_sc = px.bar(sc_df, x='Ocorrências', y='Status', orientation='h',
+                                    text=sc_df.apply(lambda r: f"{r['Ocorrências']} ({r['%']}%)", axis=1),
+                                    color_discrete_sequence=[NAVY])
+                    fig_sc.update_layout(
+                        height=max(250, len(sc_df) * 35),
+                        margin=dict(l=10, r=10, t=10, b=10),
+                        font=dict(size=11), yaxis={'categoryorder': 'total ascending'})
+                    fig_sc.update_traces(textposition='outside')
+                    st.plotly_chart(fig_sc, use_container_width=True, key="tk_status_bar")
+
+                with sc2:
+                    # Status per person (unique people per status)
+                    person_status = {}
+                    for _, row in matched.iterrows():
+                        statuses_seen = set()
+                        for dc in pres_daily_cols:
+                            if dc in row.index:
+                                v = str(row[dc]).strip().upper()
+                                if v and v != '' and v != 'NAN':
+                                    statuses_seen.add(v)
+                        for s in statuses_seen:
+                            person_status[s] = person_status.get(s, 0) + 1
+
+                    ps_df = pd.DataFrame([
+                        {'Status': k, 'Pessoas': v} for k, v in person_status.items()
+                    ]).sort_values('Pessoas', ascending=False)
+                    ps_df['%'] = (ps_df['Pessoas'] / len(matched) * 100).round(1)
+
+                    fig_ps = px.bar(ps_df, x='Pessoas', y='Status', orientation='h',
+                                    text=ps_df.apply(lambda r: f"{r['Pessoas']} ({r['%']}%)", axis=1),
+                                    color_discrete_sequence=[ORANGE])
+                    fig_ps.update_layout(
+                        height=max(250, len(ps_df) * 35),
+                        margin=dict(l=10, r=10, t=10, b=10),
+                        font=dict(size=11), yaxis={'categoryorder': 'total ascending'},
+                        xaxis_title="Pessoas (únicas)")
+                    fig_ps.update_traces(textposition='outside')
+                    st.plotly_chart(fig_ps, use_container_width=True, key="tk_status_person")
+
+                st.caption(f"Baseado em {len(matched):,} pessoas com ticket encontradas no Presenteísmo, "
+                           f"período {pres_daily_cols[0]} a {pres_daily_cols[-1]}")
+            st.markdown("---")
 
     # ── Charts ──
     ch1, ch2 = st.columns(2)
@@ -1876,7 +1968,7 @@ def page_glossario():
         ("HUB", "Hub (Centro de Distribuição)", "Centro de triagem e distribuição intermediário."),
         ("SOC", "Sorting Center", "Centro de triagem automatizada de pacotes."),
         ("Almox", "Almoxarifado", "Estoque / depósito de materiais e insumos."),
-        ("CB", "Cross Belt", "Esteira de triagem com belts cruzados para separação automatizada."),
+        ("CB", "CrossBorder", "Operação de pacotes internacionais (cross-border) processados nos hubs."),
         ("RTS", "Return to Sender", "Operação de devolução de pacotes ao remetente."),
         ("FTE", "Full-Time Employee", "Colaborador contratado diretamente (CLT SPX). No dashboard, aparece como 'SPX = TRUE'."),
         ("BPO", "Business Process Outsourcing", "Colaborador terceirizado. No dashboard, aparece como 'BPO = TRUE'."),
