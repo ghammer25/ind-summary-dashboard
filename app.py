@@ -1607,7 +1607,7 @@ def page_performance(perf_data):
 # ═══════════════════════════════════════════════════════════════════════════════
 #  PAGE: TICKETS (JIRA DESLIGAMENTO)
 # ═══════════════════════════════════════════════════════════════════════════════
-def page_tickets(df_tickets, error_msg=None, df_pres=None, pres_daily_cols=None, pres_err=None):
+def page_tickets(df_tickets, error_msg=None):
     st.markdown("#### 🎫 Tickets — Jira Desligamento")
 
     if df_tickets is None or df_tickets.empty:
@@ -1619,12 +1619,18 @@ def page_tickets(df_tickets, error_msg=None, df_pres=None, pres_daily_cols=None,
             st.warning("Dados de Tickets não disponíveis.")
         return
 
-    # ── Crosscheck with Presenteísmo ──
-    has_pres = df_pres is not None and not df_pres.empty
-    if has_pres:
-        df_tickets = crosscheck_tickets_presenteismo(df_tickets, df_pres, pres_daily_cols or [])
-    elif pres_err:
-        st.warning(f"Presenteísmo não carregado: {pres_err}")
+    # ── Crosscheck with Presenteísmo (loaded on-demand) ──
+    pres_daily_cols = []
+    has_pres = False
+    try:
+        df_pres, pres_daily_cols, pres_err = load_presenteismo()
+        if df_pres is not None and not df_pres.empty:
+            df_tickets = crosscheck_tickets_presenteismo(df_tickets, df_pres, pres_daily_cols or [])
+            has_pres = True
+        elif pres_err:
+            st.warning(f"Presenteísmo não carregado: {pres_err}")
+    except Exception as e:
+        st.warning(f"Erro ao carregar Presenteísmo: {e}")
 
     total = len(df_tickets)
 
@@ -1921,7 +1927,6 @@ def main():
     raw_summary = load_ind_summary()
     abs_growth, var_growth, perf_data = load_hc_growth()
     df_tickets, tickets_err = load_tickets()
-    df_pres, pres_daily_cols, pres_err = load_presenteismo()
 
     if df_cc.empty:
         st.error("Erro ao carregar CrossCheck.")
@@ -2021,7 +2026,7 @@ def main():
         page_performance(perf_data)
 
     with tab_tickets:
-        page_tickets(df_tickets, tickets_err, df_pres, pres_daily_cols, pres_err)
+        page_tickets(df_tickets, tickets_err)
 
     with tab_consulta:
         page_consulta(df)
