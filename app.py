@@ -40,6 +40,16 @@ st.markdown(f"""
         background: {ORANGE} !important;
     }}
     section[data-testid="stSidebar"] .stMultiSelect [data-baseweb="tag"] * {{ color: white !important; }}
+    /* ── Sidebar button ── */
+    section[data-testid="stSidebar"] button {{
+        background: {ORANGE} !important;
+        color: white !important;
+        border: none !important;
+        font-weight: 600 !important;
+    }}
+    section[data-testid="stSidebar"] button:hover {{
+        background: {RED} !important;
+    }}
     /* ── Tabs as pill buttons ── */
     .stTabs [data-baseweb="tab-list"] {{
         gap: 2px;
@@ -390,11 +400,11 @@ def load_tickets():
         sp = gc.open_by_key(TICKETS_SID)
         ws = sp.worksheet("Desligamento")
         raw = ws.get_all_values()
-    except Exception:
-        return pd.DataFrame()
+    except Exception as e:
+        return pd.DataFrame(), str(e)
 
     if len(raw) < 2:
-        return pd.DataFrame()
+        return pd.DataFrame(), "Aba 'Desligamento' está vazia."
 
     # Header row 0, data from row 1+
     # Col A(0)=Chave, B(1)=Criado, C(2)=Tipo op, D(3), E(4), F(5),
@@ -414,7 +424,7 @@ def load_tickets():
             })
 
     if not rows:
-        return pd.DataFrame()
+        return pd.DataFrame(), "Nenhum dado encontrado na aba 'Desligamento'."
 
     df = pd.DataFrame(rows)
     df = df[df['chave'].ne('') & df['chave'].ne('-')].copy()
@@ -429,7 +439,7 @@ def load_tickets():
         return None
 
     df['data_criacao'] = df['criado'].apply(parse_date)
-    return df
+    return df, None
 
 
 # ═══════════════════════════════════════════════════════════════════════════════
@@ -1465,11 +1475,16 @@ def page_performance(perf_data):
 # ═══════════════════════════════════════════════════════════════════════════════
 #  PAGE: TICKETS (JIRA DESLIGAMENTO)
 # ═══════════════════════════════════════════════════════════════════════════════
-def page_tickets(df_tickets):
+def page_tickets(df_tickets, error_msg=None):
     st.markdown("#### 🎫 Tickets — Jira Desligamento")
 
     if df_tickets is None or df_tickets.empty:
-        st.warning("Dados de Tickets não disponíveis. Verifique se a planilha possui a aba 'Desligamento'.")
+        if error_msg:
+            st.error(f"Erro ao carregar Tickets: {error_msg}")
+            st.info("Se o erro for de permissão, compartilhe a planilha com a service account "
+                    "do Streamlit Cloud (e-mail nas secrets do app).")
+        else:
+            st.warning("Dados de Tickets não disponíveis.")
         return
 
     total = len(df_tickets)
@@ -1730,7 +1745,7 @@ def main():
     df_hr = load_hr()
     raw_summary = load_ind_summary()
     abs_growth, var_growth, perf_data = load_hc_growth()
-    df_tickets = load_tickets()
+    df_tickets, tickets_err = load_tickets()
 
     if df_cc.empty:
         st.error("Erro ao carregar CrossCheck.")
@@ -1830,7 +1845,7 @@ def main():
         page_performance(perf_data)
 
     with tab_tickets:
-        page_tickets(df_tickets)
+        page_tickets(df_tickets, tickets_err)
 
     with tab_consulta:
         page_consulta(df)
