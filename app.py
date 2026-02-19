@@ -6,6 +6,7 @@ import plotly.graph_objects as go
 import os
 import pickle
 from datetime import datetime
+import difflib
 
 # ═══════════════════════════════════════════════════════════════════════════════
 #  CONFIG
@@ -186,6 +187,7 @@ def get_gc():
 SID = "1f3RtvA7F2SCdJ5XJkhXh0W8JOb6qnuyDj1zzhB1BanY"
 GROWTH_SID = "1fMgeB-AMfq0_mGzwLjAK-dEBoECUJNeAEhdJSJ1cwM0"
 TICKETS_SID = "1WvB4TEEFslSES4glultsM-C4BTBE7OaPs0hjOc0Sryg"
+PRES_SID = "1KamrQhAPQDeOUnOIc_US4EGVUiUbbj4Bf9nFf0kq7Eg"
 
 
 @st.cache_data(ttl=300, show_spinner="Carregando CrossCheck...")
@@ -440,6 +442,136 @@ def load_tickets():
 
     df['data_criacao'] = df['criado'].apply(parse_date)
     return df, None
+
+
+@st.cache_data(ttl=300, show_spinner="Carregando Presenteísmo...")
+def load_presenteismo():
+    """Load Presenteísmo (attendance) data from Controle-Fevereiro."""
+    try:
+        gc = get_gc()
+        sp = gc.open_by_key(PRES_SID)
+        ws = sp.worksheet("Controle-Fevereiro")
+        raw = ws.get_all_values()
+    except Exception as e:
+        return pd.DataFrame(), [], str(e)
+
+    if len(raw) < 2:
+        return pd.DataFrame(), [], "Aba 'Controle-Fevereiro' está vazia."
+
+    header = raw[0]
+    data = raw[1:]
+    df = pd.DataFrame(data, columns=header)
+
+    # Column F (index 5): "Nome StaffID" combined key
+    col_f = df.columns[5] if len(df.columns) > 5 else None
+    # Column R (index 17): overall status
+    col_r = df.columns[17] if len(df.columns) > 17 else None
+
+    if col_f is None:
+        return pd.DataFrame(), [], "Coluna F (chave) não encontrada."
+
+    df['_pres_key'] = df[col_f].astype(str).str.upper().str.strip()
+    df['_pres_status_geral'] = (
+        df[col_r].astype(str).str.strip() if col_r else '')
+
+    # Detect daily columns: find headers containing dates 18/02..28/02
+    target_dates = [f"{d:02d}/02" for d in range(18, 29)]
+    daily_cols = []
+    for h in header:
+        h_s = str(h).strip()
+        for td in target_dates:
+            if td in h_s:
+                daily_cols.append(h_s)
+                break
+
+    return df, daily_cols, None
+
+
+def crosscheck_tickets_presenteismo(df_tickets, df_pres, daily_cols):
+    """Cross-reference tickets against Presenteísmo using 3-tier matching."""
+    if df_tickets.empty or df_pres.empty:
+        return df_tickets
+
+    # Build lookup structures
+    pres_keys = {}
+    pres_by_sid = {}
+    pres_names = {}
+
+    for idx, row in df_pres.iterrows():
+        key = row['_pres_key']
+        if not key:
+            continue
+        pres_keys[key] = idx
+        parts = key.rsplit(' ', 1)
+        if len(parts) == 2:
+            name_part, sid_part = parts
+            pres_by_sid.setdefault(sid_part, []).append((key, idx))
+            pres_names.setdefault(name_part, []).append((key, idx))
+
+    match_status = []
+    status_geral = []
+    daily_values = {col: [] for col in daily_cols}
+
+    for _, tk in df_tickets.iterrows():
+        nome = str(tk['nome']).upper().strip()
+        sid = str(tk['staff_id']).upper().strip()
+        ticket_key = f"{nome} {sid}"
+
+        matched_idx = None
+        label = "Não Encontrado"
+
+        # Tier 1: Exact key match
+        if ticket_key in pres_keys:
+            matched_idx = pres_keys[ticket_key]
+            label = "Encontrado"
+
+        # Tier 2: Staff ID match
+        if matched_idx is None and sid:
+            candidates = pres_by_sid.get(sid, [])
+            if len(candidates) == 1:
+                matched_idx = candidates[0][1]
+                label = "Encontrado"
+            elif len(candidates) > 1:
+                best_r, best_i = 0, None
+                for ck, ci in candidates:
+                    cn = ck.rsplit(' ', 1)[0]
+                    r = difflib.SequenceMatcher(None, nome, cn).ratio()
+                    if r > best_r:
+                        best_r, best_i = r, ci
+                if best_i is not None:
+                    matched_idx = best_i
+                    label = "Encontrado"
+
+        # Tier 3: Fuzzy name match
+        if matched_idx is None and nome:
+            best_r, best_k, best_i = 0, None, None
+            for pn, entries in pres_names.items():
+                r = difflib.SequenceMatcher(None, nome, pn).ratio()
+                if r > best_r:
+                    best_r, best_k, best_i = r, entries[0][0], entries[0][1]
+            if best_r >= 0.85 and best_i is not None:
+                matched_idx = best_i
+                pres_sid = best_k.rsplit(' ', 1)[-1] if best_k else ''
+                label = ("Encontrado" if pres_sid == sid
+                         else "Encontrado (Staff ID Divergente)")
+
+        match_status.append(label)
+        if matched_idx is not None:
+            pr = df_pres.loc[matched_idx]
+            status_geral.append(str(pr['_pres_status_geral']))
+            for col in daily_cols:
+                daily_values[col].append(str(pr.get(col, '')).strip())
+        else:
+            status_geral.append('')
+            for col in daily_cols:
+                daily_values[col].append('')
+
+    result = df_tickets.copy()
+    result['match_pres'] = match_status
+    result['status_geral_pres'] = status_geral
+    for col in daily_cols:
+        result[col] = daily_values[col]
+    return result
 
 
 # ═══════════════════════════════════════════════════════════════════════════════
@@ -1475,7 +1607,7 @@ def page_performance(perf_data):
 # ═══════════════════════════════════════════════════════════════════════════════
 #  PAGE: TICKETS (JIRA DESLIGAMENTO)
 # ═══════════════════════════════════════════════════════════════════════════════
-def page_tickets(df_tickets, error_msg=None):
+def page_tickets(df_tickets, error_msg=None, df_pres=None, pres_daily_cols=None, pres_err=None):
     st.markdown("#### 🎫 Tickets — Jira Desligamento")
 
     if df_tickets is None or df_tickets.empty:
@@ -1486,6 +1618,13 @@ def page_tickets(df_tickets, error_msg=None):
         else:
             st.warning("Dados de Tickets não disponíveis.")
         return
+
+    # ── Crosscheck with Presenteísmo ──
+    has_pres = df_pres is not None and not df_pres.empty
+    if has_pres:
+        df_tickets = crosscheck_tickets_presenteismo(df_tickets, df_pres, pres_daily_cols or [])
+    elif pres_err:
+        st.warning(f"Presenteísmo não carregado: {pres_err}")
 
     total = len(df_tickets)
 
@@ -1508,10 +1647,28 @@ def page_tickets(df_tickets, error_msg=None):
             f'<h4>{title}</h4><h2>{fmt(val)}</h2></div>',
             unsafe_allow_html=True)
 
+    # ── Crosscheck KPIs ──
+    if has_pres and 'match_pres' in df_tickets.columns:
+        n_encontrado = int((df_tickets['match_pres'] == 'Encontrado').sum())
+        n_divergente = int((df_tickets['match_pres'] == 'Encontrado (Staff ID Divergente)').sum())
+        n_nao = int((df_tickets['match_pres'] == 'Não Encontrado').sum())
+        st.markdown("")
+        r2 = st.columns(4)
+        for col, (title, val, color) in zip(r2, [
+            ("No Presenteísmo", n_encontrado + n_divergente, CYAN),
+            ("Match Exato", n_encontrado, BLUE),
+            ("Staff ID Divergente", n_divergente, YELLOW),
+            ("Não Encontrado", n_nao, RED),
+        ]):
+            col.markdown(
+                f'<div class="kpi" style="background:{color}">'
+                f'<h4>{title}</h4><h2>{fmt(val)}</h2></div>',
+                unsafe_allow_html=True)
+
     st.markdown("")
 
     # ── Filters row ──
-    fc1, fc2, fc3 = st.columns(3)
+    fc1, fc2, fc3, fc4 = st.columns(4)
     with fc1:
         tipos_item = sorted([t for t in df_tickets['tipo_item'].unique() if t.strip()])
         sel_tipo_item = st.multiselect("Tipo Item", tipos_item, default=[], placeholder="Todos",
@@ -1524,6 +1681,12 @@ def page_tickets(df_tickets, error_msg=None):
         consultorias = sorted([c for c in df_tickets['consultorias'].unique() if c.strip()])
         sel_consultoria = st.multiselect("Consultoria", consultorias, default=[], placeholder="Todas",
                                           key="tk_consultoria")
+    with fc4:
+        sel_match = []
+        if has_pres and 'match_pres' in df_tickets.columns:
+            match_opts = sorted(df_tickets['match_pres'].unique())
+            sel_match = st.multiselect("Match Presenteísmo", match_opts,
+                                        default=[], placeholder="Todos", key="tk_match_pres")
 
     mask = pd.Series(True, index=df_tickets.index)
     if sel_tipo_item:
@@ -1532,6 +1695,8 @@ def page_tickets(df_tickets, error_msg=None):
         mask &= df_tickets['motivo'].isin(sel_motivo)
     if sel_consultoria:
         mask &= df_tickets['consultorias'].isin(sel_consultoria)
+    if sel_match:
+        mask &= df_tickets['match_pres'].isin(sel_match)
     fdf = df_tickets[mask].copy()
 
     st.caption(f"Exibindo {len(fdf):,} de {total:,} tickets")
@@ -1626,7 +1791,17 @@ def page_tickets(df_tickets, error_msg=None):
         'staff_id': 'Staff ID', 'nome': 'Nome', 'consultorias': 'Consultoria',
         'motivo': 'Motivo', 'tipo_item': 'Tipo Item',
     }
-    display_df = fdf[display_cols].rename(columns=col_rename)
+
+    # Add crosscheck columns if available
+    if has_pres and 'match_pres' in fdf.columns:
+        display_cols += ['match_pres', 'status_geral_pres']
+        col_rename['match_pres'] = 'Match Presenteísmo'
+        col_rename['status_geral_pres'] = 'Status Geral Pres.'
+        for dc in (pres_daily_cols or []):
+            if dc in fdf.columns:
+                display_cols.append(dc)
+
+    display_df = fdf[[c for c in display_cols if c in fdf.columns]].rename(columns=col_rename)
     st.dataframe(display_df, use_container_width=True, height=400)
 
     # ── Export ──
@@ -1746,6 +1921,7 @@ def main():
     raw_summary = load_ind_summary()
     abs_growth, var_growth, perf_data = load_hc_growth()
     df_tickets, tickets_err = load_tickets()
+    df_pres, pres_daily_cols, pres_err = load_presenteismo()
 
     if df_cc.empty:
         st.error("Erro ao carregar CrossCheck.")
@@ -1845,7 +2021,7 @@ def main():
         page_performance(perf_data)
 
     with tab_tickets:
-        page_tickets(df_tickets, tickets_err)
+        page_tickets(df_tickets, tickets_err, df_pres, pres_daily_cols, pres_err)
 
     with tab_consulta:
         page_consulta(df)
