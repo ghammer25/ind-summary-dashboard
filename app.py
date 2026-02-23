@@ -184,7 +184,7 @@ def get_gc():
 # ═══════════════════════════════════════════════════════════════════════════════
 #  DATA LOADING
 # ═══════════════════════════════════════════════════════════════════════════════
-SID = "1f3RtvA7F2SCdJ5XJkhXh0W8JOb6qnuyDj1zzhB1BanY"
+SID = "1KT7hlpaAQMoTvjaDtUUBKIH5IH8veTewqAuXAO6AO9I"
 GROWTH_SID = "1fMgeB-AMfq0_mGzwLjAK-dEBoECUJNeAEhdJSJ1cwM0"
 TICKETS_SID = "1WvB4TEEFslSES4glultsM-C4BTBE7OaPs0hjOc0Sryg"
 PRES_SID = "1KamrQhAPQDeOUnOIc_US4EGVUiUbbj4Bf9nFf0kq7Eg"
@@ -194,7 +194,7 @@ PRES_SID = "1KamrQhAPQDeOUnOIc_US4EGVUiUbbj4Bf9nFf0kq7Eg"
 def load_crosscheck():
     gc = get_gc()
     for w in gc.open_by_key(SID).worksheets():
-        if w.id == 358464056:
+        if w.id == 1232172461:
             raw = w.get_all_values()
             break
     else:
@@ -237,7 +237,7 @@ def load_crosscheck():
 def load_hr():
     gc = get_gc()
     for w in gc.open_by_key(SID).worksheets():
-        if w.id == 0:
+        if w.id == 799131882:
             raw = w.get_all_values()
             break
     else:
@@ -256,7 +256,7 @@ def load_hr():
 def load_ind_summary():
     gc = get_gc()
     for w in gc.open_by_key(SID).worksheets():
-        if w.id == 2047376970:
+        if w.id == 1143120709:
             return w.get_all_values()
     return []
 
@@ -1909,9 +1909,9 @@ Este dashboard consolida dados de **3 abas** da planilha de Reconciliation:
 
 | Fonte | Aba (gid) | Descrição |
 |-------|-----------|-----------|
-| **CrossCheck** | `358464056` | Tabela principal de reconciliação. Cruza dados de HR, Attendance e Performance para cada colaborador (staff\_id). Contém ~40K linhas com flags booleanas (in\_hr, in\_att, in\_perf, etc.), nomes, cargos, sort codes e CNPJs de cada base. |
-| **HR** | `0` | Base de dados de Recursos Humanos. Fornece dados complementares: nome do BPO, Categoria HC, Tipo de Contrato e Status HR. Usada para enriquecer filtros da sidebar. |
-| **Ind. Summary** | `2047376970` | Tabela resumo por operação (FMH, SOC, HUB, Almox, CB, RTS) com contagens de HR, Attendance, Performance e Total para cada KPI. Exibida na aba Recon com possibilidade de drill-down. |
+| **CrossCheck** | `1232172461` | Tabela principal de reconciliação. Cruza dados de HR, Attendance e Performance para cada colaborador (staff\_id). Contém ~40K linhas com flags booleanas (in\_hr, in\_att, in\_perf, etc.), nomes, cargos, sort codes e CNPJs de cada base. |
+| **HR** | `799131882` | Base de dados de Recursos Humanos. Fornece dados complementares: nome do BPO, Categoria HC, Tipo de Contrato e Status HR. Usada para enriquecer filtros da sidebar. |
+| **Ind. Summary** | `1143120709` | Tabela resumo por operação (FMH, SOC, HUB, Almox, CB, RTS) com contagens de HR, Attendance, Performance e Total para cada KPI. Exibida na aba Recon com possibilidade de drill-down. |
 | **Tickets (Jira)** | Aba `Desligamento` | Tickets de desligamento do Jira. Contém chave, data de criação, tipo de operação, Staff ID, nome, consultoria, motivo e tipo de item. |
 """)
 
@@ -2118,7 +2118,7 @@ def main():
         page_glossario()
 
     st.markdown("")
-    st.caption("v4.4 · Dados cached 5 min · Fonte: CrossCheck + Ind.Summary + HR + HC Growth + Jira")
+    st.caption("v4.5 · Dados cached 5 min · Fonte: CrossCheck + Ind.Summary + HR + HC Growth + Jira")
 
 
 if __name__ == '__main__':
