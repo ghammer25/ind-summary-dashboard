@@ -936,6 +936,16 @@ def page_recon(fdf, raw_summary):
          count_by_op(active_bpos[active_bpos['all_dbs']], lambda g: (~g['loc_eq_perf']).sum(), ops_report)),
     ]
 
+    # Total rows (FTE + BPO)
+    total_rows = [
+        ("Não contém nas bases - Total (FTE+BPO)",
+         {op: report_data[0][1].get(op, 0) + report_data[3][1].get(op, 0) for op in ops_report}),
+        ("OK (Sort Code correto) - Total (FTE+BPO)",
+         {op: report_data[1][1].get(op, 0) + report_data[4][1].get(op, 0) for op in ops_report}),
+        ("Location divergente - Total (FTE+BPO)",
+         {op: report_data[2][1].get(op, 0) + report_data[5][1].get(op, 0) for op in ops_report}),
+    ]
+
     h = ('<div style="overflow-x:auto;border-radius:8px;border:1px solid #e0e4e8;">'
          '<table class="rtable"><tr><th style="text-align:left;min-width:250px">Categoria</th>')
     for op in ops_report:
@@ -943,6 +953,15 @@ def page_recon(fdf, raw_summary):
     h += '</tr>'
     for label, vals in report_data:
         h += f'<tr><td>{label}</td>'
+        for op in ops_report:
+            v = vals.get(op, 0)
+            cls = 'vz' if v == 0 else ('vh' if v > 500 else ('vm' if v > 100 else ''))
+            h += f'<td class="{cls}">{fmt(v)}</td>'
+        h += '</tr>'
+    # Separator + totals
+    h += f'<tr><td colspan="{len(ops_report)+1}" style="padding:2px;background:#1B2A4A;"></td></tr>'
+    for label, vals in total_rows:
+        h += f'<tr style="background:#f0f4fa;font-weight:700;"><td>{label}</td>'
         for op in ops_report:
             v = vals.get(op, 0)
             cls = 'vz' if v == 0 else ('vh' if v > 500 else ('vm' if v > 100 else ''))
